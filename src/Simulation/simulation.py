@@ -31,7 +31,6 @@ class Simulation:
         self.population_size = population_size
         self.grid_size = grid_size
         self.turns_per_generation = turns_per_generation
-        self.environment = Environment(grid_size)
         self.population = self._create_initial_population()
 
     def _create_initial_population(self) -> list[Agent]:
@@ -51,10 +50,26 @@ class Simulation:
 
     def run_generation(self):
         """
-        Runs a single generation, allowing each agent to take its turns.
+        Runs a single generation in a turn-based manner.
+
+        In each turn, every agent makes one move. This process is repeated for
+        the total number of turns, creating a shared, dynamic environment where
+        agents can indirectly interact.
         """
+        # A fresh environment is created for each generation to ensure a fair test
+        self.environment = Environment(self.grid_size)
+
+        # Reset agents' fitness and position for the new generation
         for agent in self.population:
-            for _ in range(self.turns_per_generation):
+            agent.fitness_score = 0
+            agent.position = (
+                random.randint(0, self.grid_size - 1),
+                random.randint(0, self.grid_size - 1),
+            )
+
+        # Run the turn-based simulation
+        for _ in range(self.turns_per_generation):
+            for agent in self.population:
                 agent.decide_and_act(self.environment)
 
     def evolve(self):

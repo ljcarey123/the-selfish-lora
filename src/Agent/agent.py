@@ -65,3 +65,4 @@ class Agent:
         elif action == "GATHER":
             resources_collected = environment.remove_resource_at(self.position)
             self.fitness_score += resources_collected
+
