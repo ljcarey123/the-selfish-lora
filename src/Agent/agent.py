@@ -27,6 +27,7 @@ class Agent:
         self.position = initial_position
         self.grid_size = grid_size
         self.fitness_score = 0
+        self.path_history = [("START", initial_position)]
 
     def decide_and_act(self, environment: Environment):
         """
@@ -54,15 +55,22 @@ class Agent:
         """
         x, y = self.position
 
-        if action == "MOVE_N":
-            self.position = (max(0, x - 1), y)
-        elif action == "MOVE_S":
-            self.position = (min(self.grid_size - 1, x + 1), y)
-        elif action == "MOVE_E":
-            self.position = (x, min(self.grid_size - 1, y + 1))
-        elif action == "MOVE_W":
-            self.position = (x, max(0, y - 1))
+        if action.startswith("MOVE"):
+            if action == "MOVE_N":
+                self.position = (max(0, x - 1), y)
+            elif action == "MOVE_S":
+                self.position = (min(self.grid_size - 1, x + 1), y)
+            elif action == "MOVE_E":
+                self.position = (x, min(self.grid_size - 1, y + 1))
+            elif action == "MOVE_W":
+                self.position = (x, max(0, y - 1))
+            self.path_history.append(("MOVE", self.position))
+
         elif action == "GATHER":
             resources_collected = environment.remove_resource_at(self.position)
             self.fitness_score += resources_collected
+            if resources_collected > 0:
+                self.path_history.append(("GATHER_SUCCESS", self.position))
+            else:
+                self.path_history.append(("GATHER_FAIL", self.position))
 

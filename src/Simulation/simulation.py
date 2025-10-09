@@ -66,6 +66,7 @@ class Simulation:
                 random.randint(0, self.grid_size - 1),
                 random.randint(0, self.grid_size - 1),
             )
+            agent.path_history = [("START", agent.position)]
 
         # Run the turn-based simulation
         for _ in range(self.turns_per_generation):
@@ -120,3 +121,15 @@ class Simulation:
             return 0.0
         total_fitness = sum(agent.fitness_score for agent in self.population)
         return total_fitness / len(self.population)
+
+    def get_top_agents(self, n: int = 1) -> list['Agent']:
+        """
+        Finds the top n agents with the highest fitness scores in the current population.
+
+        Args:
+            n (int): The number of top agents to return.
+
+        Returns:
+            list[Agent]: A list of the top n agents.
+        """
+        return sorted(self.population, key=lambda agent: agent.fitness_score, reverse=True)[:n]
