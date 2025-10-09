@@ -22,8 +22,10 @@ def main():
         # Run the simulation for one generation
         sim.run_generation()
 
-        # Get the average fitness for the completed generation
-        avg_fitness = sim.get_average_fitness()
+        # Get the latest performance metrics for the completed generation
+        latest_metrics = sim.performance_history[-1]
+        avg_fitness = latest_metrics["average_fitness"]
+        max_fitness = latest_metrics["max_fitness"]
 
         # Store the paths of the top champions for this generation
         top_champions = sim.get_top_agents(n=3)
@@ -32,7 +34,7 @@ def main():
         print(
             f"Generation {gen + 1}/{num_generations} | "
             f"Average Fitness: {avg_fitness:.2f} | "
-            f"Top Champion Fitness: {top_champions[0].fitness_score}"
+            f"Max Fitness: {max_fitness}"
         )
 
         # Evolve the population to create the next generation
@@ -52,6 +54,9 @@ def main():
         os.makedirs(output_dir)
 
     simulation_data = {
+        "performance_history": sim.performance_history,
+        "genetic_history": sim.genetic_history,
+        "behavioral_history": sim.behavioral_history,
         "champion_paths_by_gen": champion_paths_by_gen,
         "final_population_paths": final_population_paths,
     }
@@ -69,6 +74,18 @@ def main():
         f"Visualizing top champion path for final generation ({num_generations - 1})..."
     )
     visualizer.animate_champion_path(generation=num_generations - 1, champion_rank=0)
+
+    # Plot and save the performance metrics graph
+    print("\nPlotting performance metrics...")
+    visualizer.plot_performance_metrics()
+
+    # Plot and save the genetic diversity graph
+    print("\nPlotting genetic diversity...")
+    visualizer.plot_genetic_diversity()
+
+    # Plot and save the behavioral metrics graph
+    print("\nPlotting behavioral metrics...")
+    visualizer.plot_behavioral_metrics()
 
 
 if __name__ == "__main__":

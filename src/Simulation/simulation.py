@@ -32,6 +32,9 @@ class Simulation:
         self.grid_size = grid_size
         self.turns_per_generation = turns_per_generation
         self.population = self._create_initial_population()
+        self.performance_history = []
+        self.genetic_history = []
+        self.behavioral_history = []
 
     def _create_initial_population(self) -> list[Agent]:
         """
@@ -67,11 +70,15 @@ class Simulation:
                 random.randint(0, self.grid_size - 1),
             )
             agent.path_history = [("START", agent.position)]
+            agent.action_history = []
 
         # Run the turn-based simulation
         for _ in range(self.turns_per_generation):
             for agent in self.population:
                 agent.decide_and_act(self.environment)
+
+        # After the generation is complete, calculate and store performance metrics
+        self._calculate_and_store_metrics()
 
     def evolve(self):
         """
@@ -133,3 +140,56 @@ class Simulation:
             list[Agent]: A list of the top n agents.
         """
         return sorted(self.population, key=lambda agent: agent.fitness_score, reverse=True)[:n]
+
+    def _calculate_genetic_diversity(self, sample_size=100) -> float:
+        """
+        Calculates the genetic diversity of the population.
+
+        This is done by taking a sample of agent pairs and calculating the
+        average Euclidean distance between their brain weights.
+
+        Args:
+            sample_size (int): The number of pairs to sample.
+
+        Returns:
+            float: The average genetic distance.
+        """
+        if len(self.population) < 2:
+            return 0.0
+
+        distances = []
+        for _ in range(sample_size):
+            agent1, agent2 = random.sample(self.population, 2)
+            dist = np.linalg.norm(agent1.brain.get_weights() - agent2.brain.get_weights())
+            distances.append(dist)
+        
+        return float(np.mean(distances))
+
+    def _calculate_and_store_metrics(self):
+        """
+        Calculates performance metrics for the current population and stores them.
+        """
+        if not self.population:
+            return
+
+        fitness_scores = [agent.fitness_score for agent in self.population]
+
+        metrics = {
+            "average_fitness": float(np.mean(fitness_scores)),
+            "max_fitness": int(np.max(fitness_scores)),
+            "min_fitness": int(np.min(fitness_scores)),
+            "median_fitness": float(np.median(fitness_scores)),
+            "std_dev_fitness": float(np.std(fitness_scores)),
+        }
+        self.performance_history.append(metrics)
+
+        # Also calculate and store genetic diversity
+        genetic_diversity = self._calculate_genetic_diversity()
+        self.genetic_history.append(genetic_diversity)
+
+        # And finally, calculate and store behavioral metrics
+        action_counts = {}
+        for agent in self.population:
+            for action in agent.action_history:
+                action_counts[action] = action_counts.get(action, 0) + 1
+        self.behavioral_history.append(action_counts)

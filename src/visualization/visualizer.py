@@ -128,6 +128,134 @@ class Visualizer:
             plt.legend()
             plt.show()
 
+    def plot_performance_metrics(self, save_as_png=True):
+        """
+        Plots the collected performance metrics over generations.
+
+        Args:
+            save_as_png (bool): If True, saves the plot as a PNG image.
+        """
+        history = self.data['performance_history']
+        if not history:
+            print("No performance history to plot.")
+            return
+
+        generations = range(len(history))
+        avg_fitness = [g['average_fitness'] for g in history]
+        max_fitness = [g['max_fitness'] for g in history]
+        min_fitness = [g['min_fitness'] for g in history]
+        std_dev = [g['std_dev_fitness'] for g in history]
+
+        avg_fitness = np.array(avg_fitness)
+        std_dev = np.array(std_dev)
+
+        fig, ax = plt.subplots(figsize=(12, 7))
+        ax.plot(generations, avg_fitness, 'b-', label='Average Fitness')
+        ax.plot(generations, max_fitness, 'g--', label='Maximum Fitness')
+        ax.plot(generations, min_fitness, 'r:', label='Minimum Fitness')
+
+        # Add a shaded region for the standard deviation, ensuring it doesn't go below zero
+        lower_bound = np.maximum(0, avg_fitness - std_dev)
+        ax.fill_between(generations, lower_bound, avg_fitness + std_dev,
+                        color='blue', alpha=0.1, label='Std. Deviation')
+
+        ax.set_title('Population Fitness Over Generations')
+        ax.set_xlabel('Generation')
+        ax.set_ylabel('Fitness Score')
+        ax.legend()
+        ax.grid(True, linestyle='--', alpha=0.6)
+
+        if save_as_png:
+            output_dir = 'output'
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            png_path = os.path.join(output_dir, 'performance_metrics.png')
+            plt.savefig(png_path)
+            print(f'Performance plot saved to {png_path}')
+        else:
+            plt.show()
+
+    def plot_genetic_diversity(self, save_as_png=True):
+        """
+        Plots the genetic diversity of the population over generations.
+
+        Args:
+            save_as_png (bool): If True, saves the plot as a PNG image.
+        """
+        history = self.data['genetic_history']
+        if not history:
+            print("No genetic history to plot.")
+            return
+
+        generations = range(len(history))
+
+        fig, ax = plt.subplots(figsize=(12, 7))
+        ax.plot(generations, history, 'm-', label='Genetic Diversity')
+
+        ax.set_title('Genetic Diversity Over Generations')
+        ax.set_xlabel('Generation')
+        ax.set_ylabel('Average Genetic Distance')
+        ax.legend()
+        ax.grid(True, linestyle='--', alpha=0.6)
+
+        if save_as_png:
+            output_dir = 'output'
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            png_path = os.path.join(output_dir, 'genetic_diversity.png')
+            plt.savefig(png_path)
+            print(f'Genetic diversity plot saved to {png_path}')
+        else:
+            plt.show()
+
+    def plot_behavioral_metrics(self, save_as_png=True):
+        """
+        Plots the distribution of agent actions over generations.
+
+        Args:
+            save_as_png (bool): If True, saves the plot as a PNG image.
+        """
+        history = self.data['behavioral_history']
+        if not history:
+            print("No behavioral history to plot.")
+            return
+
+        # Get all unique action types across the entire simulation
+        all_actions = sorted(list(set(action for gen_actions in history for action in gen_actions.keys())))
+        
+        # Prepare data for stacked area chart
+        y_data = {action: [] for action in all_actions}
+        for gen_actions in history:
+            total_actions = sum(gen_actions.values())
+            for action in all_actions:
+                count = gen_actions.get(action, 0)
+                percentage = (count / total_actions) * 100 if total_actions > 0 else 0
+                y_data[action].append(percentage)
+
+        generations = range(len(history))
+        labels = list(y_data.keys())
+        data_to_stack = list(y_data.values())
+
+        fig, ax = plt.subplots(figsize=(12, 7))
+        ax.stackplot(generations, data_to_stack, labels=labels)
+
+        ax.set_title('Action Distribution Over Generations')
+        ax.set_xlabel('Generation')
+        ax.set_ylabel('Percentage of Actions (%)')
+        ax.set_ylim(0, 100)
+        ax.legend(loc='upper right')
+        ax.grid(True, linestyle='--', alpha=0.6)
+
+        if save_as_png:
+            output_dir = 'output'
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            png_path = os.path.join(output_dir, 'behavioral_metrics.png')
+            plt.savefig(png_path)
+            print(f'Behavioral metrics plot saved to {png_path}')
+        else:
+            plt.show()
+
 
 def main():
     """
@@ -146,6 +274,18 @@ def main():
     # Animate the top champion of the first generation as a test
     print("Visualizing top champion path for generation 0...")
     visualizer.animate_champion_path(generation=0, champion_rank=0)
+
+    # Plot the performance metrics
+    print("\nPlotting performance metrics...")
+    visualizer.plot_performance_metrics()
+
+    # Plot the genetic diversity
+    print("\nPlotting genetic diversity...")
+    visualizer.plot_genetic_diversity()
+
+    # Plot the behavioral metrics
+    print("\nPlotting behavioral metrics...")
+    visualizer.plot_behavioral_metrics()
 
 
 if __name__ == "__main__":

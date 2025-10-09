@@ -28,6 +28,7 @@ class Agent:
         self.grid_size = grid_size
         self.fitness_score = 0
         self.path_history = [("START", initial_position)]
+        self.action_history = []
 
     def decide_and_act(self, environment: Environment):
         """
@@ -41,6 +42,7 @@ class Agent:
 
         # 2. Decide on an action using the brain
         action_string = self.brain.choose_action(perception)
+        self.action_history.append(action_string)
 
         # 3. Act based on the decision
         self._execute_action(action_string, environment)
