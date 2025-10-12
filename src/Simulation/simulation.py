@@ -1,5 +1,10 @@
 import numpy as np
 import random
+import os
+import torch
+from dotenv import load_dotenv
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import get_peft_model, LoraConfig
 from Environment.environment import Environment
 from Agent.agent import Agent
 from LoraBrain.lora_brain import LoraBrain
@@ -17,8 +22,10 @@ class Simulation:
     def __init__(
         self,
         population_size: int = 50,
-        grid_size: int = 50,
+        grid_size: int = 30,
         turns_per_generation: int = 100,
+        mutation_strength: float = 0.05,
+        num_elites: int = 2,
     ):
         """
         Initializes the simulation.
@@ -31,25 +38,58 @@ class Simulation:
         self.population_size = population_size
         self.grid_size = grid_size
         self.turns_per_generation = turns_per_generation
+        self.mutation_strength = mutation_strength
+        self.num_elites = num_elites
+
+        # Load environment variables and get the token
+        load_dotenv()
+        hf_token = os.getenv("HF_TOKEN")
+
+        # Load the base LLM once for the entire simulation
+        print("Loading base LLM (Qwen/Qwen2.5-0.5B-Instruct) and preparing for LoRA...")
+        model = AutoModelForCausalLM.from_pretrained(
+            "Qwen/Qwen2.5-0.5B-Instruct", dtype="auto", token=hf_token
+        )
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            "Qwen/Qwen2.5-0.5B-Instruct", token=hf_token
+        )
+        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+
+        # Define LoRA configuration
+        peft_config = LoraConfig(
+            r=4,  # Rank of the LoRA matrices
+            lora_alpha=16,  # A scaling factor
+            target_modules=["q_proj", "v_proj"],  # Target attention layers
+            lora_dropout=0.05,
+            bias="none",
+        )
+
+        # Wrap the base model with PEFT
+        self.base_model = get_peft_model(model, peft_config)
+        print("Base PeftModel and tokenizer loaded.")
+
         self.population = self._create_initial_population()
         self.performance_history = []
         self.genetic_history = []
         self.behavioral_history = []
+        self.environment_history = {}
+        self.initial_environment_history = {}
 
     def _create_initial_population(self) -> list[Agent]:
         """
         Creates the first generation of agents with random brains.
         """
-        population = []
-        for _ in range(self.population_size):
-            brain = LoraBrain()  # Create a brain with random initial weights
-            initial_position = (
-                random.randint(0, self.grid_size - 1),
-                random.randint(0, self.grid_size - 1),
+        return [
+            Agent(
+                brain=LoraBrain(self.base_model),
+                initial_position=(
+                    random.randint(0, self.grid_size - 1),
+                    random.randint(0, self.grid_size - 1),
+                ),
+                grid_size=self.grid_size,
             )
-            agent = Agent(brain, initial_position, self.grid_size)
-            population.append(agent)
-        return population
+            for _ in range(self.population_size)
+        ]
 
     def run_generation(self):
         """
@@ -61,6 +101,8 @@ class Simulation:
         """
         # A fresh environment is created for each generation to ensure a fair test
         self.environment = Environment(self.grid_size)
+        # Store the initial state of the environment for visualization
+        self.initial_environment_history[len(self.performance_history)] = self.environment.grid.copy().tolist()
 
         # Reset agents' fitness and position for the new generation
         for agent in self.population:
@@ -74,8 +116,10 @@ class Simulation:
 
         # Run the turn-based simulation
         for _ in range(self.turns_per_generation):
+            # Get the model and tokenizer once per generation
+            base_model, tokenizer = self.get_base_model_and_tokenizer()
             for agent in self.population:
-                agent.decide_and_act(self.environment)
+                agent.decide_and_act(self.environment, base_model, tokenizer)
 
         # After the generation is complete, calculate and store performance metrics
         self._calculate_and_store_metrics()
@@ -91,32 +135,41 @@ class Simulation:
         """
         # 1. Selection (Truncation Selection)
         self.population.sort(key=lambda agent: agent.fitness_score, reverse=True)
-        num_survivors = self.population_size // 2  # Keep the top 50%
-        parents = self.population[:num_survivors]
+        elites = self.get_top_agents(n=self.num_elites)
+        next_generation = elites[:]  # Make a copy
 
-        # 2. Reproduction & 3. Mutation
-        next_generation = []
+        # Generate new agents by crossover and mutation
+        parents = self.get_top_agents(n=self.population_size // 2)
         while len(next_generation) < self.population_size:
             parent1, parent2 = random.choices(parents, k=2)
 
-            # Crossover: Average the weights of the parents' brains
-            child_weights = (
-                parent1.brain.get_weights() + parent2.brain.get_weights()
-            ) / 2.0
+            # Create a new brain for the child
+            child_brain = LoraBrain(self.base_model)
+            child_weights = {}
 
-            # Mutation: Add a small amount of random noise
-            mutation_strength = 0.05  # Controls the magnitude of mutation
-            mutation = np.random.randn(*child_weights.shape) * mutation_strength
-            child_weights += mutation
+            # Crossover: For each weight tensor, randomly pick from one parent
+            p1_weights = parent1.brain.get_weights()
+            p2_weights = parent2.brain.get_weights()
+            for name in p1_weights:
+                if random.random() < 0.5:
+                    child_weights[name] = p1_weights[name].clone()
+                else:
+                    child_weights[name] = p2_weights[name].clone()
 
-            # Create the new child agent
-            child_brain = LoraBrain(weights=child_weights)
+            # Mutation: Apply a small random change to the child's weights
+            for name in child_weights:
+                mutation = (
+                    torch.randn_like(child_weights[name]) * self.mutation_strength
+                )
+                child_weights[name] += mutation
+
+            child_brain.set_weights(child_weights)
+
             initial_position = (
                 random.randint(0, self.grid_size - 1),
                 random.randint(0, self.grid_size - 1),
             )
-            child = Agent(child_brain, initial_position, self.grid_size)
-            next_generation.append(child)
+            next_generation.append(Agent(child_brain, initial_position, self.grid_size))
 
         self.population = next_generation
 
@@ -129,7 +182,7 @@ class Simulation:
         total_fitness = sum(agent.fitness_score for agent in self.population)
         return total_fitness / len(self.population)
 
-    def get_top_agents(self, n: int = 1) -> list['Agent']:
+    def get_top_agents(self, n: int = 1) -> list["Agent"]:
         """
         Finds the top n agents with the highest fitness scores in the current population.
 
@@ -139,7 +192,13 @@ class Simulation:
         Returns:
             list[Agent]: A list of the top n agents.
         """
-        return sorted(self.population, key=lambda agent: agent.fitness_score, reverse=True)[:n]
+        return sorted(
+            self.population, key=lambda agent: agent.fitness_score, reverse=True
+        )[:n]
+
+    def get_base_model_and_tokenizer(self):
+        """Returns the shared base LLM and tokenizer."""
+        return self.base_model, self.tokenizer
 
     def _calculate_genetic_diversity(self, sample_size=100) -> float:
         """
@@ -158,11 +217,25 @@ class Simulation:
             return 0.0
 
         distances = []
+        # Ensure we have a population to sample from
+        if len(self.population) < 2:
+            return 0.0
+
         for _ in range(sample_size):
             agent1, agent2 = random.sample(self.population, 2)
-            dist = np.linalg.norm(agent1.brain.get_weights() - agent2.brain.get_weights())
-            distances.append(dist)
-        
+            weights1 = agent1.brain.get_weights()
+            weights2 = agent2.brain.get_weights()
+
+            total_dist = 0
+            num_weights = 0
+            for name in weights1:
+                dist = torch.norm(weights1[name].float() - weights2[name].float())
+                total_dist += dist.item()
+                num_weights += 1
+
+            if num_weights > 0:
+                distances.append(total_dist / num_weights)
+
         return float(np.mean(distances))
 
     def _calculate_and_store_metrics(self):
@@ -181,11 +254,13 @@ class Simulation:
             "median_fitness": float(np.median(fitness_scores)),
             "std_dev_fitness": float(np.std(fitness_scores)),
         }
-        self.performance_history.append(metrics)
 
-        # Also calculate and store genetic diversity
+        # --- Genetic Diversity ---
         genetic_diversity = self._calculate_genetic_diversity()
+        metrics["genetic_diversity"] = genetic_diversity
         self.genetic_history.append(genetic_diversity)
+
+        self.performance_history.append(metrics)
 
         # And finally, calculate and store behavioral metrics
         action_counts = {}
@@ -193,3 +268,8 @@ class Simulation:
             for action in agent.action_history:
                 action_counts[action] = action_counts.get(action, 0) + 1
         self.behavioral_history.append(action_counts)
+
+        # Store the environment grid for this generation
+        self.environment_history[len(self.performance_history) - 1] = (
+            self.environment.grid.tolist()
+        )

@@ -35,7 +35,10 @@ The system is composed of five primary components:
 
 - **File:** `src/LoraBrain/lora_brain.py`
 - **Responsibility:** The agent's decision-making "brain."
-- **MVP Status:** Currently, it makes random decisions. The long-term goal is to replace this with a real LLM guided by the evolved `weights`.
+- **Implementation Details:** The brain uses the `Qwen/Qwen2.5-0.5B-Instruct` model as its foundation. At each turn, it constructs a two-part prompt:
+  - A **System Prompt** that defines the agent's high-level goal (e.g., "You are a creature trying to survive...").
+  - A **User Prompt** that provides the immediate situational context (perception, history, available actions).
+- This prompt is then passed to the base model, with the agent's unique LoRA weights applied, to generate the chosen action.
 
 ### `Environment`
 

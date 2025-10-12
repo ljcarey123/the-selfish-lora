@@ -10,27 +10,106 @@ class Visualizer:
     Handles the visualization of the simulation results.
     """
 
-    def __init__(self, data_path, grid_size=50):
+    def __init__(self, data_path=None, data=None, grid_size=50):
         """
         Initializes the Visualizer.
 
+        Can be initialized either from a file path or a direct data dictionary.
+
         Args:
-            data_path (str): Path to the simulation data JSON file.
+            data_path (str, optional): Path to the simulation data JSON file.
+            data (dict, optional): A dictionary containing simulation data.
             grid_size (int): The size of the simulation grid.
         """
         self.grid_size = grid_size
-        with open(data_path, "r") as f:
-            self.data = json.load(f)
 
-        # The original environment places resources in a fixed pattern.
-        # We can recreate it here for the background.
-        self.resource_grid = np.zeros((grid_size, grid_size), dtype=int)
-        center = self.grid_size // 2
-        self.resource_grid[center - 5 : center + 5, center - 5 : center + 5] = 1
-        self.resource_grid[2:7, 2:7] = 1
-        self.resource_grid[-7:-2, -7:-2] = 1
-        self.resource_grid[2:7, -7:-2] = 1
-        self.resource_grid[-7:-2, 2:7] = 1
+        if data_path:
+            with open(data_path, "r") as f:
+                self.data = json.load(f)
+        elif data:
+            self.data = data
+        else:
+            raise ValueError("Visualizer must be initialized with either 'data_path' or 'data'.")
+
+
+
+    def animate_top_n_champion_paths(
+        self, generation, n=3, save_as_gif=True
+    ):
+        """
+        Creates an animation of the top n champions' paths for a given generation.
+
+        Args:
+            generation (int): The generation number to animate.
+            n (int): The number of top champions to display.
+            save_as_gif (bool): If True, saves the animation as a GIF.
+        """
+        paths = self.data["champion_paths_by_gen"].get(str(generation))
+        if not paths or len(paths) < n:
+            print(f"Error: Not enough champion paths for generation {generation} (found {len(paths)}).")
+            return
+
+        fig, ax = plt.subplots(figsize=(10, 10))
+        ax.set_title(f"Top {n} Champion Paths - Generation {generation}")
+        ax.set_xticks([]), ax.set_yticks([])
+
+        # Load the initial environment for the specified generation to show all original resources
+        history_key = "initial_environment_history"
+        if history_key not in self.data:
+            print(f"Warning: '{history_key}' not found. Falling back to 'environment_history'.")
+            history_key = "environment_history"
+        resource_grid = np.array(self.data[history_key][str(generation)])
+        ax.imshow(resource_grid, cmap="Greens", alpha=0.3)
+
+        colors = plt.cm.jet(np.linspace(0, 1, n))
+        agent_markers = []
+        path_lines = []
+        for i in range(n):
+            (agent_marker,) = ax.plot([], [], 'o', color=colors[i], markersize=10, label=f"Agent {i+1}")
+            (path_line,) = ax.plot([], [], '-', color=colors[i], alpha=0.6)
+            agent_markers.append(agent_marker)
+            path_lines.append(path_line)
+
+        ax.legend()
+
+        # Determine the maximum path length for uniform animation
+        max_frames = max(len(p) for p in paths[:n])
+
+        def init():
+            for i in range(n):
+                agent_markers[i].set_data([], [])
+                path_lines[i].set_data([], [])
+            return agent_markers + path_lines
+
+        def update(frame):
+            for i in range(n):
+                path = paths[i]
+                if frame < len(path):
+                    action, pos = path[frame]
+                    x, y = pos
+                    agent_markers[i].set_data([y], [x])
+
+                    # Draw path up to current frame
+                    path_positions = [p[1] for p in path[: frame + 1]]
+                    path_y_coords = [p[0] for p in path_positions]
+                    path_x_coords = [p[1] for p in path_positions]
+                    path_lines[i].set_data(path_x_coords, path_y_coords)
+            return agent_markers + path_lines
+
+        ani = animation.FuncAnimation(
+            fig, update, frames=max_frames, init_func=init, blit=True, interval=150
+        )
+
+        if save_as_gif:
+            gifs_dir = os.path.join("output", "gifs")
+            if not os.path.exists(gifs_dir):
+                os.makedirs(gifs_dir)
+            gif_path = os.path.join(gifs_dir, f"champion_paths_gen_{generation}_top_{n}.gif")
+            ani.save(gif_path, writer="pillow")
+            print(f"Animation for generation {generation} saved to {gif_path}")
+        else:
+            plt.show()
+        plt.close(fig)
 
     def animate_champion_path(self, generation, champion_rank=0, save_as_gif=True):
         """
@@ -56,8 +135,20 @@ class Visualizer:
         ax.set_title(f"Champion Path - Generation {generation}")
         ax.set_xticks([]), ax.set_yticks([])
 
+        # Load the initial environment for the specified generation to show all original resources
+        generation_str = str(generation)
+        history_key = "initial_environment_history"
+        if history_key not in self.data or generation_str not in self.data[history_key]:
+            print(f"Warning: Initial environment for generation {generation} not found. Falling back to 'environment_history'.")
+            history_key = "environment_history"
+        
+        if generation_str not in self.data[history_key]:
+            print(f"Error: Environment for generation {generation} not found in data.")
+            return
+        resource_grid = np.array(self.data[history_key][generation_str])
+
         # Draw the resource grid background
-        ax.imshow(self.resource_grid, cmap="Greens", alpha=0.3)
+        ax.imshow(resource_grid, cmap="Greens", alpha=0.3)
 
         # Initialize plot elements
         (agent_marker,) = ax.plot([], [], "bo", markersize=10, label="Agent")
@@ -81,7 +172,7 @@ class Visualizer:
         def update(frame):
             action, pos = path[frame]
             x, y = pos
-            agent_marker.set_data(y, x)
+            agent_marker.set_data([y], [x])
 
             # Check for GATHER actions
             if action == "GATHER_SUCCESS":
@@ -118,10 +209,12 @@ class Visualizer:
         )
 
         if save_as_gif:
-            output_dir = "output"
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
-            gif_path = os.path.join(output_dir, f"champion_gen_{generation}.gif")
+            gifs_dir = os.path.join("output", "gifs")
+            if not os.path.exists(gifs_dir):
+                os.makedirs(gifs_dir)
+            gif_path = os.path.join(
+                gifs_dir, f"champion_path_gen_{generation}_rank_{champion_rank}.gif"
+            )
             ani.save(gif_path, writer="pillow")
             print(f"Animation saved to {gif_path}")
         else:
