@@ -2,24 +2,24 @@
 
 ## Project Overview
 
-"The Selfish LoRA" is a Python-based evolutionary simulation. The goal is to simulate agents in an environment where they compete for resources. The project uses a genetic algorithm to evolve the agents' "brains" over generations, aiming to develop intelligent behaviors. The "LoRA" aspect suggests a future integration with a Large Language Model (LLM) using Low-Rank Adaptation.
+This project focuses on fine-tuning a small, instruction-following Large Language Model (LLM) to act as a simple robot agent. The agent's goal is to navigate a 2D grid to find a resource ('R'). The project involves creating a synthetic, perfectly balanced dataset to teach the model a specific, narrow skill and then evaluating its performance against the base model.
 
 ## Project Goals
 
-### Current Goal: First Major Evolutionary Experiment
+### Current Goal: Successful Fine-Tuning and Evaluation
 
-Having validated the core simulation mechanics, the project has now entered its first major experimental phase. The primary objective is to run a long-form simulation to observe if complex, non-random behaviors can evolve in a challenging environment.
+The primary objective was to create a robust pipeline to fine-tune a base LLM and prove that the fine-tuning improved its performance on a specialized task. This has been successfully achieved.
 
-**Key Experimental Parameters:**
-- **Generations:** 25
-- **Population Size:** 20
-- **Grid Size:** 60x60 (a large, challenging world)
-- **Turns per Generation:** 100
+**Key Results:**
+- **Base Model Accuracy:** 0.00%
+- **Fine-Tuned Model Accuracy:** 100.00%
+- **Improvement:** +100.00%
 
 **Success Criteria:**
-- Observe a clear, upward trend in the `average_fitness` over the 25 generations.
-- See a corresponding decrease in the frequency of "unparsable response" warnings, indicating the evolution of communicative competence.
-- Qualitatively analyze the champion agent paths for signs of non-random, strategic exploration.
+- Create a balanced dataset for training, validation, and testing. (✅ Achieved)
+- Develop a training script that can successfully fine-tune a LoRA adapter. (✅ Achieved)
+- Implement an evaluation script to provide a clear, quantitative measure of improvement. (✅ Achieved)
+- Demonstrate a significant accuracy improvement in the fine-tuned model over the base model. (✅ Achieved)
 
 ### Long-Term Goals
 
@@ -39,11 +39,10 @@ Having validated the core simulation mechanics, the project has now entered its 
 
 ## Key Components
 
-- **`main.py`**: The main entry point for running the simulation.
-- **`Simulation`**: (`src/Simulation/`) The central orchestrator, managing the evolutionary loop.
-- **`Agent`**: (`src/Agent/`) Represents an individual agent in the simulation.
-- **`LoraBrain`**: (`src/LoraBrain/`) The agent's decision-making module. It uses a base LLM (`Qwen/Qwen2.5-0.5B-Instruct`) guided by evolved LoRA weights to choose actions.
-- **`Environment`**: (`src/Environment/`) The grid world where agents live and gather resources.
+- **`create_dataset.py`**: (`fine_tuning/`) Generates a synthetic, balanced dataset and splits it into training, validation, and test sets.
+- **`fine_tune_model.py`**: (`fine_tuning/`) Runs the fine-tuning process using the training and validation sets. It saves the best-performing LoRA adapter.
+- **`evaluate_model.py`**: (`fine_tuning/`) Provides a final, side-by-side comparison of the base model vs. the fine-tuned model on the held-out test set, reporting a definitive accuracy score.
+- **Base LLM**: `Qwen/Qwen2.5-0.5B-Instruct` is used as the foundation model for fine-tuning.
 
 ## Coding Style & Conventions
 

@@ -50,7 +50,19 @@ The system is composed of five primary components:
 - **File:** `src/visualization/visualizer.py`
 - **Responsibility:** Reads the output data and generates all plots and animations.
 
-## 3. Simulation Flow
+## 3. Configuration Management
+
+The project uses a centralized and flexible configuration system to manage shared strings and settings, ensuring consistency across different parts of the application (e.g., between dataset generation and agent inference).
+
+- **`.env` file:** Located at the project root, this file stores environment-specific variables. Its primary role in this system is to define `PROMPTS_FILE_PATH`, which points to the location of the prompts configuration file.
+
+- **`config/prompts.json`:** This file is the single source of truth for all user-facing and system-level prompts, such as the `SYSTEM_PROMPT` and the list of `VALID_ACTIONS`. Its JSON format makes it easy to read and edit.
+
+- **`config_loader.py` Modules:** Located in both the `src` and `fine_tuning` directories, these modules are responsible for loading the `.env` file, reading the path from `PROMPTS_FILE_PATH`, and then loading the contents of the `prompts.json` file. They expose the configuration values as Python constants that can be easily imported by any script in their respective directories.
+
+This architecture allows for easy modification of prompts without changing any Python code, and it keeps sensitive information like API keys out of version control.
+
+## 4. Simulation Flow
 
 The simulation proceeds in a sequence orchestrated by `main.py`:
 

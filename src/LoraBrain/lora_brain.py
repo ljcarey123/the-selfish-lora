@@ -2,6 +2,7 @@ import numpy as np
 import random
 import torch
 import re
+from .config_loader import SYSTEM_PROMPT, VALID_ACTIONS
 
 
 class LoraBrain:
@@ -10,7 +11,7 @@ class LoraBrain:
     that will be injected into the base LLM to guide its decisions.
     """
 
-    ACTIONS = ["North", "South", "East", "West", "Gather"]
+    ACTIONS = VALID_ACTIONS
 
     def __init__(self, peft_model):
         # Initialize with random weights that match the PEFT model's layers
@@ -27,34 +28,19 @@ class LoraBrain:
         """Sets the brain's LoRA weights."""
         self.weights = new_weights
 
-    def _create_contextual_perception(self, perception: np.ndarray) -> list[str]:
-        """Translates the numeric grid perception into a list of natural language statements."""
-        context_statements = []
-        center = perception.shape[0] // 2
-
-        # Cardinal directions for resources
-        if perception[center, center + 1] == 1:
-            context_statements.append("- A resource 'R' is to your East.")
-        if perception[center, center - 1] == 1:
-            context_statements.append("- A resource 'R' is to your West.")
-        if perception[center - 1, center] == 1:
-            context_statements.append("- A resource 'R' is to your North.")
-        if perception[center + 1, center] == 1:
-            context_statements.append("- A resource 'R' is to your South.")
-        if perception[center, center] == 1:
-            context_statements.append("- You are on top of a resource 'R'.")
-
-        # Cardinal directions for walls
-        if perception[center, center + 1] == -1:
-            context_statements.append("- There is a wall to your East.")
-        if perception[center, center - 1] == -1:
-            context_statements.append("- There is a wall to your West.")
-        if perception[center - 1, center] == -1:
-            context_statements.append("- There is a wall to your North.")
-        if perception[center + 1, center] == -1:
-            context_statements.append("- There is a wall to your South.")
-
-        return context_statements
+    def _format_grid(self, perception: np.ndarray) -> str:
+        """Formats the agent's perception grid into a string for the LLM prompt."""
+        # Mapping from grid values to characters
+        tiles = {0: ".", 1: "R", -1: "W"}
+        grid_str = "+---+\n"
+        for i, row in enumerate(perception):
+            row_str = "".join([tiles.get(val, "?") for val in row])
+            # The agent is always at the center
+            if i == 1:
+                row_str = row_str[:1] + "A" + row_str[2:]
+            grid_str += f"|{row_str}|\n"
+        grid_str += "+---+"
+        return grid_str
 
     def _parse_llm_response(self, response: str) -> str:
         """Finds the chosen action in the LLM's response using a regex."""
@@ -65,7 +51,7 @@ class LoraBrain:
                 return action
         for action in self.ACTIONS:
             # Use regex to find whole word matches, case-insensitive
-            if re.search(r'\b' + action + r'\b', response, re.IGNORECASE):
+            if re.search(r"\b" + action + r"\b", response, re.IGNORECASE):
                 return action
         return None  # Return None if no action is found
 
@@ -83,37 +69,34 @@ class LoraBrain:
                 if name in self.weights:
                     param.data.copy_(self.weights[name])
 
-        # 2. Create the prompt
-        context_list = self._create_contextual_perception(perception)
+        # 2. Create the prompt using the new grid-based format
+        grid_representation = self._format_grid(perception)
 
-        # Conditionally add the 'Gather' action
+        system_prompt = SYSTEM_PROMPT
+        # Conditionally add the 'Gather' action to the list of available actions
         available_actions = [a for a in self.ACTIONS if a != "Gather"]
-        # The center of the perception grid is the agent's current location
         center_x = center_y = perception.shape[0] // 2
         if perception[center_x, center_y] == 1:  # 1 represents a resource
             available_actions.append("Gather")
 
-        context_list.append(f"- Available actions are {available_actions}.")
+        # Build the user prompt with all available context
+        prompt_parts = [f"SITUATION:\n{grid_representation}"]
+        prompt_parts.append(f"- Available actions are {available_actions}.")
         if action_history:
-            context_list.append(
-                f"- Your recent history is: {action_history}. Avoid repeating pointless moves."
-            )
-        context_str = "\n".join(context_list)
+            prompt_parts.append(f"- Your recent history is: {action_history}.")
+        prompt_parts.append("\nACTION:")
 
-        system_prompt = """You are a creature trying to survive. Your goal is to collect as many resources 'R' as possible. Choose the single best action from the list to achieve this goal."""
+        user_prompt = "\n".join(prompt_parts)
 
-        user_prompt = f"""SITUATION:
-{context_str}
-
-ACTION:"""
-
-        # 3. Get the LLM's decision
+        # 3. Get the LLM's decision using the chat template
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+
+        # For inference, we use add_generation_prompt=True to signal the model to generate a response.
         prompt_string = tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, tokenize=False
+            messages, tokenize=False, add_generation_prompt=True
         )
         model_inputs = tokenizer(prompt_string, return_tensors="pt").to(
             base_model.device

@@ -3,6 +3,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import get_peft_model, LoraConfig
 import os
 from dotenv import load_dotenv
+from .config_loader import SYSTEM_PROMPT
 
 
 def run_lora_test():
@@ -60,8 +61,8 @@ def run_lora_test():
     )
 
     # 4. Define a list of test prompts
-    # Define the core System Prompt that contains the agent's rules
-    system_prompt = """You are a creature trying to survive. Your goal is to collect as many resources 'R' as possible. Choose the single best action from the list to achieve this goal."""
+    # Use the centralized system prompt
+    system_prompt = SYSTEM_PROMPT
 
     # Define a dictionary of different test scenarios (user prompts)
     test_scenarios = {

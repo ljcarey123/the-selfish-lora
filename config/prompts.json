@@ -1,0 +1,10 @@
+{
+    "SYSTEM_PROMPT": "You are a creature in a simulation. Your goal is to survive by collecting resources 'R'. The grid below shows your immediate surroundings. '.' is empty space, 'W' is a wall, and 'A' is you. Choose the single best action from the available list.",
+    "VALID_ACTIONS": [
+        "North",
+        "South",
+        "East",
+        "West",
+        "Gather"
+    ]
+}

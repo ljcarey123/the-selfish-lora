@@ -73,14 +73,16 @@ def test_personality(champion_number: int):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-    prompt_string = tokenizer.apply_chat_template(
-        messages, add_generation_prompt=True, tokenize=False
-    )
-    model_inputs = tokenizer(prompt_string, return_tensors="pt").to(peft_model.device)
 
     print("\nAsking the champion...\n")
     print(f'System Prompt: "{system_prompt}"')
     print(f'User Prompt: "{user_prompt}"\n')
+
+    # Use the chat template for inference
+    prompt_string = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    model_inputs = tokenizer(prompt_string, return_tensors="pt").to(peft_model.device)
 
     with torch.no_grad():
         outputs = peft_model.generate(**model_inputs, max_new_tokens=50)
