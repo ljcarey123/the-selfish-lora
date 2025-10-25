@@ -2,7 +2,7 @@ import numpy as np
 import random
 import torch
 import re
-from .config_loader import SYSTEM_PROMPT, VALID_ACTIONS
+from config_loader import SYSTEM_PROMPT, VALID_ACTIONS
 
 
 class LoraBrain:
@@ -32,15 +32,16 @@ class LoraBrain:
         """Formats the agent's perception grid into a string for the LLM prompt."""
         # Mapping from grid values to characters
         tiles = {0: ".", 1: "R", -1: "W"}
-        grid_str = "+---+\n"
+        grid_lines = []
         for i, row in enumerate(perception):
-            row_str = "".join([tiles.get(val, "?") for val in row])
+            row_str = " ".join([tiles.get(val, "?") for val in row])
             # The agent is always at the center
             if i == 1:
-                row_str = row_str[:1] + "A" + row_str[2:]
-            grid_str += f"|{row_str}|\n"
-        grid_str += "+---+"
-        return grid_str
+                row_str = (
+                    row_str[:2] + "A" + row_str[3:]
+                )  # Replace middle character with 'A'
+            grid_lines.append(row_str)
+        return "\n".join(grid_lines)
 
     def _parse_llm_response(self, response: str) -> str:
         """Finds the chosen action in the LLM's response using a regex."""
@@ -69,24 +70,27 @@ class LoraBrain:
                 if name in self.weights:
                     param.data.copy_(self.weights[name])
 
-        # 2. Create the prompt using the new grid-based format
+        # 2. Create the prompt using the exact format from fine-tuning
         grid_representation = self._format_grid(perception)
 
         system_prompt = SYSTEM_PROMPT
-        # Conditionally add the 'Gather' action to the list of available actions
-        available_actions = [a for a in self.ACTIONS if a != "Gather"]
-        center_x = center_y = perception.shape[0] // 2
-        if perception[center_x, center_y] == 1:  # 1 represents a resource
-            available_actions.append("Gather")
 
-        # Build the user prompt with all available context
-        prompt_parts = [f"SITUATION:\n{grid_representation}"]
-        prompt_parts.append(f"- Available actions are {available_actions}.")
-        if action_history:
-            prompt_parts.append(f"- Your recent history is: {action_history}.")
-        prompt_parts.append("\nACTION:")
+        # Format history to match fine-tuning format (last 3 actions)
+        history_formatted = action_history[-3:] if action_history else []
+        # Pad with empty strings if less than 3
+        while len(history_formatted) < 3:
+            history_formatted.insert(0, "")
 
-        user_prompt = "\n".join(prompt_parts)
+        history_str = "\n".join(f"- {h}" if h else "-" for h in history_formatted)
+
+        # Build the user prompt exactly as in fine-tuning
+        user_prompt = f"""PERCEPTION:
+{grid_representation}
+
+HISTORY (Last 3 actions):
+{history_str}
+
+ACTION:"""
 
         # 3. Get the LLM's decision using the chat template
         messages = [

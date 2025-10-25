@@ -69,6 +69,12 @@ class Visualizer:
             (path_line,) = ax.plot([], [], '-', color=colors[i], alpha=0.6)
             agent_markers.append(agent_marker)
             path_lines.append(path_line)
+        
+        # Add gather markers (shared across all agents)
+        (success_markers,) = ax.plot([], [], 'g*', markersize=12, label="Gather Success", linestyle='None')
+        (fail_markers,) = ax.plot([], [], 'rx', markersize=10, label="Gather Fail", linestyle='None')
+        successful_gather_coords = set()
+        unsuccessful_gather_coords = set()
 
         ax.legend()
 
@@ -79,7 +85,9 @@ class Visualizer:
             for i in range(n):
                 agent_markers[i].set_data([], [])
                 path_lines[i].set_data([], [])
-            return agent_markers + path_lines
+            success_markers.set_data([], [])
+            fail_markers.set_data([], [])
+            return agent_markers + path_lines + [success_markers, fail_markers]
 
         def update(frame):
             for i in range(n):
@@ -88,13 +96,28 @@ class Visualizer:
                     action, pos = path[frame]
                     x, y = pos
                     agent_markers[i].set_data([y], [x])
+                    
+                    # Check for GATHER actions
+                    if action == "GATHER_SUCCESS":
+                        successful_gather_coords.add(tuple(pos))
+                    elif action == "GATHER_FAIL":
+                        unsuccessful_gather_coords.add(tuple(pos))
 
                     # Draw path up to current frame
                     path_positions = [p[1] for p in path[: frame + 1]]
                     path_y_coords = [p[0] for p in path_positions]
                     path_x_coords = [p[1] for p in path_positions]
                     path_lines[i].set_data(path_x_coords, path_y_coords)
-            return agent_markers + path_lines
+            
+            # Update gather markers
+            if successful_gather_coords:
+                success_y, success_x = zip(*successful_gather_coords)
+                success_markers.set_data(success_x, success_y)
+            if unsuccessful_gather_coords:
+                fail_y, fail_x = zip(*unsuccessful_gather_coords)
+                fail_markers.set_data(fail_x, fail_y)
+            
+            return agent_markers + path_lines + [success_markers, fail_markers]
 
         ani = animation.FuncAnimation(
             fig, update, frames=max_frames, init_func=init, blit=True, interval=150
@@ -346,6 +369,75 @@ class Visualizer:
             png_path = os.path.join(output_dir, 'behavioral_metrics.png')
             plt.savefig(png_path)
             print(f'Behavioral metrics plot saved to {png_path}')
+        else:
+            plt.show()
+
+    def plot_agent_heatmap(self, generation, save_as_png=True):
+        """
+        Creates a heatmap showing where agents spent time during a generation.
+        
+        Args:
+            generation (int): The generation to visualize.
+            save_as_png (bool): If True, saves the plot as a PNG image.
+        """
+        generation_str = str(generation)
+        
+        # Get all agent paths for this generation
+        if 'champion_paths_by_gen' in self.data and generation_str in self.data['champion_paths_by_gen']:
+            paths = self.data['champion_paths_by_gen'][generation_str]
+        else:
+            print(f"No path data found for generation {generation}")
+            return
+        
+        # Create a heatmap grid
+        heatmap = np.zeros((self.grid_size, self.grid_size))
+        
+        # Count visits to each cell
+        for path in paths:
+            for action, pos in path:
+                if action != "START":  # Skip the start marker
+                    x, y = pos
+                    if 0 <= x < self.grid_size and 0 <= y < self.grid_size:
+                        heatmap[x, y] += 1
+        
+        # Get the environment to show resources
+        history_key = "initial_environment_history"
+        if history_key not in self.data:
+            history_key = "environment_history"
+        
+        if generation_str in self.data.get(history_key, {}):
+            resource_grid = np.array(self.data[history_key][generation_str])
+        else:
+            resource_grid = None
+        
+        # Create the plot
+        fig, ax = plt.subplots(figsize=(12, 10))
+        
+        # Plot the heatmap
+        im = ax.imshow(heatmap, cmap='YlOrRd', alpha=0.8)
+        
+        # Overlay resource locations if available
+        if resource_grid is not None:
+            # Show resources as green contours
+            resource_mask = (resource_grid == 1)
+            ax.contour(resource_mask, colors='green', linewidths=2, levels=[0.5])
+        
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label('Number of Agent Visits', rotation=270, labelpad=20)
+        
+        ax.set_title(f'Agent Movement Heatmap - Generation {generation}\n(Green outlines = Resources)')
+        ax.set_xlabel('Y Position')
+        ax.set_ylabel('X Position')
+        
+        if save_as_png:
+            output_dir = 'output'
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            png_path = os.path.join(output_dir, f'agent_heatmap_gen_{generation}.png')
+            plt.savefig(png_path, dpi=150, bbox_inches='tight')
+            print(f'Agent heatmap saved to {png_path}')
+            plt.close()
         else:
             plt.show()
 

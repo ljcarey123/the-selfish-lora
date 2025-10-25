@@ -4,7 +4,7 @@ import os
 import torch
 from dotenv import load_dotenv
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import get_peft_model, LoraConfig
+from peft import get_peft_model, LoraConfig, PeftModel
 from Environment.environment import Environment
 from Agent.agent import Agent
 from LoraBrain.lora_brain import LoraBrain
@@ -40,6 +40,7 @@ class Simulation:
         self.turns_per_generation = turns_per_generation
         self.mutation_strength = mutation_strength
         self.num_elites = num_elites
+        self.current_generation = 0  # Track generation number for seeded environments
 
         # Load environment variables and get the token
         load_dotenv()
@@ -48,18 +49,26 @@ class Simulation:
         # Load the base LLM once for the entire simulation
         print("Loading base LLM (Qwen/Qwen2.5-0.5B-Instruct) and preparing for LoRA...")
         model = AutoModelForCausalLM.from_pretrained(
-            "Qwen/Qwen2.5-0.5B-Instruct", dtype="auto", token=hf_token
+            "Qwen/Qwen2.5-0.5B-Instruct", trust_remote_code=True, token=hf_token
         )
         self.tokenizer = AutoTokenizer.from_pretrained(
             "Qwen/Qwen2.5-0.5B-Instruct", token=hf_token
         )
         self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
-        # Define LoRA configuration
+        # Define LoRA configuration (must match fine-tuning config)
         peft_config = LoraConfig(
-            r=4,  # Rank of the LoRA matrices
-            lora_alpha=16,  # A scaling factor
-            target_modules=["q_proj", "v_proj"],  # Target attention layers
+            r=16,  # Rank of the LoRA matrices (matches fine-tuning)
+            lora_alpha=32,  # Scaling factor (matches fine-tuning)
+            target_modules=[
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],  # All modules used in fine-tuning
             lora_dropout=0.05,
             bias="none",
         )
@@ -77,19 +86,69 @@ class Simulation:
 
     def _create_initial_population(self) -> list[Agent]:
         """
-        Creates the first generation of agents with random brains.
+        Creates the first generation of agents with brains initialized from fine-tuned weights.
+        Each agent starts with the fine-tuned weights plus small random noise for diversity.
         """
-        return [
-            Agent(
-                brain=LoraBrain(self.base_model),
+        # Load fine-tuned weights from src/weights
+        weights_path = os.path.join(os.path.dirname(__file__), "..", "weights")
+        fine_tuned_weights = None
+
+        if os.path.exists(weights_path):
+            try:
+                print(f"Loading fine-tuned weights from {weights_path}...")
+                # Load the fine-tuned adapter into a temporary model
+                temp_model = PeftModel.from_pretrained(self.base_model, weights_path)
+
+                # Extract the LoRA weights
+                fine_tuned_weights = {}
+                for name, param in temp_model.named_parameters():
+                    if "lora_A" in name or "lora_B" in name:
+                        fine_tuned_weights[name] = param.data.clone()
+
+                print(f"Loaded {len(fine_tuned_weights)} fine-tuned weight tensors.")
+            except Exception as e:
+                print(f"Warning: Could not load fine-tuned weights: {e}")
+                print("Initializing with random weights instead.")
+                fine_tuned_weights = None
+        else:
+            print(f"Warning: Fine-tuned weights not found at {weights_path}")
+            print("Initializing with random weights instead.")
+
+        # Create population
+        population = []
+        for i in range(self.population_size):
+            brain = LoraBrain(self.base_model)
+
+            # If we have fine-tuned weights, initialize with them + noise
+            if fine_tuned_weights is not None:
+                brain_weights = brain.get_weights()
+                for name in brain_weights:
+                    if name in fine_tuned_weights:
+                        # Start with fine-tuned weights and add small random noise
+                        noise = (
+                            torch.randn_like(fine_tuned_weights[name]) * 0.01
+                        )  # 1% noise (matches mutation strength)
+                        brain_weights[name] = fine_tuned_weights[name].clone() + noise
+                brain.set_weights(brain_weights)
+
+            agent = Agent(
+                brain=brain,
                 initial_position=(
                     random.randint(0, self.grid_size - 1),
                     random.randint(0, self.grid_size - 1),
                 ),
                 grid_size=self.grid_size,
             )
-            for _ in range(self.population_size)
-        ]
+            population.append(agent)
+
+        if fine_tuned_weights is not None:
+            print(
+                f"Initialized {self.population_size} agents with fine-tuned weights + 1% noise (0.01)"
+            )
+        else:
+            print(f"Initialized {self.population_size} agents with random weights")
+
+        return population
 
     def run_generation(self):
         """
@@ -99,10 +158,20 @@ class Simulation:
         the total number of turns, creating a shared, dynamic environment where
         agents can indirectly interact.
         """
-        # A fresh environment is created for each generation to ensure a fair test
+        # Use generation number as seed for reproducible but varied environments
+        # Each generation gets a different layout, but reruns are consistent
+        np.random.seed(self.current_generation + 42)  # +42 for variety
+        random.seed(self.current_generation + 42)
+        
+        # A fresh environment is created for each generation
         self.environment = Environment(self.grid_size)
+        
+        # Increment generation counter for next time
+        self.current_generation += 1
         # Store the initial state of the environment for visualization
-        self.initial_environment_history[len(self.performance_history)] = self.environment.grid.copy().tolist()
+        self.initial_environment_history[len(self.performance_history)] = (
+            self.environment.grid.copy().tolist()
+        )
 
         # Reset agents' fitness and position for the new generation
         for agent in self.population:

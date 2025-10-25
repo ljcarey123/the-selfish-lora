@@ -15,11 +15,11 @@ def main(num_generations: int = 25):
 
     # Initialize the simulation
     sim = Simulation(
-        population_size=1,
-        grid_size=60,
-        turns_per_generation=1,
-        mutation_strength=0.0005,  # Drastically reduced for stability
-        num_elites=1,
+        population_size=20,  # Sufficient diversity for evolution (was 5 - too small!)
+        grid_size=30,  # Manageable grid size
+        turns_per_generation=50,  # Reduced from 100 (faster with +5 scoring)
+        mutation_strength=0.01,  # 1% mutation for exploration
+        num_elites=3,  # Top 15% survive (3/20)
     )
 
     champion_paths_by_gen = {}
@@ -119,6 +119,10 @@ def main(num_generations: int = 25):
     print("\nPlotting behavioral metrics...")
     visualizer.plot_behavioral_metrics()
 
+    # Plot agent movement heatmap for final generation
+    print(f"\nGenerating agent movement heatmap for final generation ({num_generations - 1})...")
+    visualizer.plot_agent_heatmap(generation=num_generations - 1)
+
     print("\n--- All tasks complete ---")
 
 
@@ -127,7 +131,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_generations",
         type=int,
-        default=5,
+        default=20,  # Increased from 5 for meaningful evolution
         help="The number of generations to run the simulation for.",
     )
     args = parser.parse_args()

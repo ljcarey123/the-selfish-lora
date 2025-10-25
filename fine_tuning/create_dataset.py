@@ -1,9 +1,11 @@
 import json
 import random
 import os
+from itertools import combinations
+from collections import defaultdict
 
 SYSTEM_PROMPT = """You are a simple robot agent. You exist within a grid. Your goal is to navigate to the 'R' (resource). Your only possible outputs are the single words: 'North', 'South', 'East', 'West', 'Gather'."""
-VALID_ACTIONS = ['North', 'South', 'East', 'West', 'Gather']
+VALID_ACTIONS = ["North", "South", "East", "West", "Gather"]
 
 # --- Configuration ---
 # You can easily control the final dataset size and balance from here.
@@ -14,25 +16,30 @@ GRID_SIZE = 3
 OUTPUT_FILE = "data/finetuning_data.json"
 
 
-def _add_distractors(grid, unsafe_coords):
+def _generate_all_distractor_combinations(safe_spots, min_walls=1, max_walls=3):
     """
-    Adds 1-2 random 'W' (wall) distractors to empty spots on the grid,
-    avoiding the specified unsafe coordinates (resource and optimal path).
+    Generates all possible combinations of placing 1-3 walls in safe spots.
+    Returns a list of distractor position combinations.
     """
-    empty_spots = [
-        (r, c) for r in range(GRID_SIZE) for c in range(GRID_SIZE) if grid[r][c] == "."
-    ]
-    safe_spots = [pos for pos in empty_spots if pos not in unsafe_coords]
+    all_combinations = []
 
-    if not safe_spots:
-        return grid
+    for num_walls in range(min_walls, min(max_walls + 1, len(safe_spots) + 1)):
+        for combo in combinations(safe_spots, num_walls):
+            all_combinations.append(list(combo))
 
-    num_distractors = random.randint(1, min(2, len(safe_spots)))
-    distractor_positions = random.sample(safe_spots, num_distractors)
+    return all_combinations
+
+
+def _add_distractors(grid, unsafe_coords, distractor_positions):
+    """
+    Adds specific 'W' (wall) distractors to the grid at given positions.
+    """
+    grid_copy = [row[:] for row in grid]  # Deep copy
 
     for pos in distractor_positions:
-        grid[pos[0]][pos[1]] = "W"
-    return grid
+        grid_copy[pos[0]][pos[1]] = "W"
+
+    return grid_copy
 
 
 def _generate_forced_scenario(scenario_type, orientation):
@@ -86,8 +93,13 @@ def _generate_forced_scenario(scenario_type, orientation):
             elif resource_pos == (2, 2):
                 unsafe_coords.extend([(2, 1), (1, 2)])
 
-    grid = _add_distractors(grid, unsafe_coords)
-    return grid, correct_action
+    # Calculate safe spots for distractors
+    empty_spots = [
+        (r, c) for r in range(GRID_SIZE) for c in range(GRID_SIZE) if grid[r][c] == "."
+    ]
+    safe_spots = [pos for pos in empty_spots if pos not in unsafe_coords]
+
+    return grid, correct_action, safe_spots
 
 
 def _format_user_prompt(grid, history):
@@ -106,8 +118,8 @@ ACTION:"""
 
 
 def generate_dataset():
-    """Generates a perfectly balanced dataset for fine-tuning the agent."""
-    print("Generating perfectly balanced dataset...")
+    """Generates a dataset with all possible distractor combinations for each scenario."""
+    print("Generating dataset with exhaustive distractor combinations...")
 
     tasks = []
     # 1. Gather Scenarios
@@ -126,49 +138,110 @@ def generate_dataset():
         for orientation in diagonal_orientations:
             tasks.append(("DIAGONAL_MOVE", orientation))
 
-    random.shuffle(tasks)
-
     final_dataset = []
+    action_to_examples = defaultdict(
+        list
+    )  # Track examples by action for stratified split
     seen_grids = set()
 
     for scenario_type, orientation in tasks:
-        while True:
-            grid, action = _generate_forced_scenario(scenario_type, orientation)
-            # Use a tuple of tuples as a hashable representation of the grid
+        # Get the base grid and safe spots
+        base_grid, action, safe_spots = _generate_forced_scenario(
+            scenario_type, orientation
+        )
+
+        # Generate all possible distractor combinations
+        distractor_combos = _generate_all_distractor_combinations(
+            safe_spots, min_walls=1, max_walls=3
+        )
+
+        # If no safe spots, just use the base grid with no distractors
+        if not distractor_combos:
+            distractor_combos = [[]]
+
+        for distractor_positions in distractor_combos:
+            grid = _add_distractors(base_grid, [], distractor_positions)
             grid_tuple = tuple(map(tuple, grid))
 
-            if grid_tuple not in seen_grids:
-                seen_grids.add(grid_tuple)
-                break  # Found a unique grid, exit the while loop
+            if grid_tuple in seen_grids:
+                continue  # Skip duplicate grids
 
-        # Now that we have a unique grid, generate a random history for it
-        history = random.choices(VALID_ACTIONS, k=3)
-        user_prompt_string = _format_user_prompt(grid, history)
+            seen_grids.add(grid_tuple)
 
-        example = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt_string},
-            {"role": "assistant", "content": action},
-        ]
-        final_dataset.append(example)
+            # Generate a random history for variety
+            history = random.choices(VALID_ACTIONS, k=3)
+            user_prompt_string = _format_user_prompt(grid, history)
 
-    return final_dataset
+            example = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt_string},
+                {"role": "assistant", "content": action},
+            ]
+
+            final_dataset.append(example)
+            action_to_examples[action].append(example)
+
+    print(f"\nGenerated {len(final_dataset)} total examples (before balancing)")
+    print("Action distribution (before balancing):")
+    for action in sorted(action_to_examples.keys()):
+        print(f"  {action}: {len(action_to_examples[action])} examples")
+
+    # Balance the dataset: ensure all actions have the same number of examples
+    min_count = min(len(examples) for examples in action_to_examples.values())
+    print(f"\nBalancing dataset to {min_count} examples per action...")
+
+    balanced_action_to_examples = {}
+    for action, examples in action_to_examples.items():
+        # Randomly sample to match the minimum count
+        if len(examples) > min_count:
+            balanced_action_to_examples[action] = random.sample(examples, min_count)
+        else:
+            balanced_action_to_examples[action] = examples
+
+    # Rebuild final dataset from balanced examples
+    final_dataset = []
+    for examples in balanced_action_to_examples.values():
+        final_dataset.extend(examples)
+
+    print(f"\nFinal balanced dataset: {len(final_dataset)} total examples")
+    print("Action distribution (after balancing):")
+    for action in sorted(balanced_action_to_examples.keys()):
+        print(f"  {action}: {len(balanced_action_to_examples[action])} examples")
+
+    return final_dataset, balanced_action_to_examples
 
 
 if __name__ == "__main__":
-    full_dataset = generate_dataset()
-    random.shuffle(full_dataset) # Shuffle before splitting
+    full_dataset, action_to_examples = generate_dataset()
 
-    # Define split sizes
-    total_size = len(full_dataset)
-    train_size = int(total_size * 0.70)
-    val_size = int(total_size * 0.15)
-    test_size = total_size - train_size - val_size
+    # Stratified split: maintain action distribution across splits
+    train_dataset = []
+    validation_dataset = []
+    test_dataset = []
 
-    # Split the dataset
-    train_dataset = full_dataset[:train_size]
-    validation_dataset = full_dataset[train_size : train_size + val_size]
-    test_dataset = full_dataset[train_size + val_size :]
+    # Define split ratios
+    train_ratio = 0.70
+    val_ratio = 0.15
+    test_ratio = 0.15
+
+    print("\nPerforming stratified split to maintain class distribution...")
+
+    for action, examples in action_to_examples.items():
+        # Shuffle examples for this action
+        random.shuffle(examples)
+
+        n = len(examples)
+        train_end = int(n * train_ratio)
+        val_end = train_end + int(n * val_ratio)
+
+        train_dataset.extend(examples[:train_end])
+        validation_dataset.extend(examples[train_end:val_end])
+        test_dataset.extend(examples[val_end:])
+
+    # Shuffle the final splits
+    random.shuffle(train_dataset)
+    random.shuffle(validation_dataset)
+    random.shuffle(test_dataset)
 
     # Define output directory and filenames
     output_dir = os.path.dirname(OUTPUT_FILE)

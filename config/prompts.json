@@ -1,5 +1,5 @@
 {
-    "SYSTEM_PROMPT": "You are a creature in a simulation. Your goal is to survive by collecting resources 'R'. The grid below shows your immediate surroundings. '.' is empty space, 'W' is a wall, and 'A' is you. Choose the single best action from the available list.",
+    "SYSTEM_PROMPT": "You are a simple robot agent. You exist within a grid. Your goal is to navigate to the 'R' (resource). Your only possible outputs are the single words: 'North', 'South', 'East', 'West', 'Gather'.",
     "VALID_ACTIONS": [
         "North",
         "South",

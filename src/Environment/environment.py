@@ -24,7 +24,7 @@ class Environment:
     def reset(self):
         """Clears the grid and places resources randomly."""
         self.grid.fill(0)
-        num_resources = int(self.grid_size * self.grid_size * 0.10)  # 10% of the grid has resources randomly.
+        num_resources = int(self.grid_size * self.grid_size * 0.20)  # 20% of the grid has resources randomly.
         self._place_resources(num_resources)
 
     def _place_resources(self, num_resources):

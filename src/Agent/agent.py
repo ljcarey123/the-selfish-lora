@@ -72,25 +72,40 @@ class Agent:
     def _execute_action(self, action: str, environment: Environment):
         """
         Executes the given action and updates the agent's state.
+        Applies fitness rewards and penalties based on action outcomes.
         """
 
         x, y = self.position
 
         if action.upper() in ["NORTH", "SOUTH", "EAST", "WEST"]:
+            # Calculate intended new position
             if action.upper() == "NORTH":
-                self.position = (max(0, x - 1), y)
+                new_x, new_y = x - 1, y
             elif action.upper() == "SOUTH":
-                self.position = (min(self.grid_size - 1, x + 1), y)
+                new_x, new_y = x + 1, y
             elif action.upper() == "EAST":
-                self.position = (x, min(self.grid_size - 1, y + 1))
+                new_x, new_y = x, y + 1
             elif action.upper() == "WEST":
-                self.position = (x, max(0, y - 1))
+                new_x, new_y = x, y - 1
+            
+            # Check if move is valid (within bounds)
+            if 0 <= new_x < self.grid_size and 0 <= new_y < self.grid_size:
+                # Valid move
+                self.position = (new_x, new_y)
+            else:
+                # Hit a wall - small penalty
+                self.fitness_score -= 0.1
+                # Position stays the same
+            
             self.path_history.append(("MOVE", self.position))
 
         elif action.upper() == "GATHER":
             resources_collected = environment.remove_resource_at(self.position)
-            self.fitness_score += resources_collected
             if resources_collected > 0:
+                # Successful gather - significant reward
+                self.fitness_score += 5.0
                 self.path_history.append(("GATHER_SUCCESS", self.position))
             else:
+                # Failed gather attempt - small penalty
+                self.fitness_score -= 0.1
                 self.path_history.append(("GATHER_FAIL", self.position))

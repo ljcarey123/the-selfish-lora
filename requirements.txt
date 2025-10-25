@@ -9,4 +9,5 @@ accelerate==0.29.3
 matplotlib==3.8.4
 tensorboard==2.16.2
 bitsandbytes-windows==0.37.5
-scikit-learn==1.4.2
+scikit-learn==1.7.2
+optuna==4.5.0
