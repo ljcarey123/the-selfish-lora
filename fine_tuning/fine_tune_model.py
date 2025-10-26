@@ -25,9 +25,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 
 MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
+# Default to V1 dataset (can be overridden with --use-v2 flag)
 TRAIN_DATA_PATH = os.path.join(SCRIPT_DIR, "data", "train_data.json")
 VALIDATION_DATA_PATH = os.path.join(SCRIPT_DIR, "data", "validation_data.json")
-OUTPUT_DIR = os.path.join(SCRIPT_DIR, "output", "final_champion_model")
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "output")
 
 LORA_R = 16
 LORA_ALPHA = 32
@@ -43,30 +44,36 @@ LORA_TARGET_MODULES = [
 ]
 
 TRAINING_ARGS = {
+    # Core training settings
     "output_dir": OUTPUT_DIR,
-    "num_train_epochs": 1,  # Just need a warm-start for evolution, not perfect performance
-    "per_device_train_batch_size": 4,
-    "gradient_accumulation_steps": 2,
+    "num_train_epochs": 3,  # More epochs to allow learning, with early stopping
+    "per_device_train_batch_size": 4,  # Will be tuned by hyperparameter search
+    "gradient_accumulation_steps": 2,  # Effective batch size = 4 * 2 = 8
+    
+    # Optimizer settings
     "optim": "adamw_torch",
-    "save_steps": 50,
-    "logging_steps": 1,
-    "learning_rate": 2e-5,
-    "warmup_ratio": 0.03,
-    "group_by_length": True,
-    "lr_scheduler_type": "constant",
-    "report_to": "none",
-    "evaluation_strategy": "epoch",
-    "save_strategy": "epoch",  # Save checkpoint at each epoch
-    "load_best_model_at_end": True,  # Automatically load best checkpoint
-    "metric_for_best_model": "eval_loss",  # Use eval_loss to determine best epoch
-    "save_total_limit": 3,  # Keep only the 3 best checkpoints to save disk space
+    "learning_rate": 2e-5,  # Will be tuned by hyperparameter search
+    "weight_decay": 0.01,  # L2 regularization prevents overfitting
+    "warmup_ratio": 0.03,  # Will be tuned by hyperparameter search
+    
+    # Regularization to prevent output collapse
+    "label_smoothing_factor": 0.05,  # Reduced - was preventing confident predictions
+    
+    # Evaluation and saving (once per epoch since we only have 1 epoch)
+    "evaluation_strategy": "epoch",  # Evaluate at end of epoch
+    "save_strategy": "epoch",  # Save at end of epoch
+    "save_total_limit": 1,  # Keep only the best checkpoint
+    "load_best_model_at_end": True,  # Load best checkpoint (only one anyway)
+    "metric_for_best_model": "eval_loss",
+    
+    # Logging and misc
+    "logging_steps": 1,  # Log every step for visibility
+    "report_to": "none",  # Don't send to wandb/tensorboard
 }
 
 # Early stopping configuration
-EARLY_STOPPING_PATIENCE = (
-    1  # Stop if no improvement for 1 epoch (aggressive for small dataset)
-)
-EARLY_STOPPING_THRESHOLD = 0.0  # Minimum change to qualify as an improvement
+EARLY_STOPPING_PATIENCE = 2  # Stop if no improvement for 2 epochs
+EARLY_STOPPING_THRESHOLD = 0.01  # Minimum change to qualify as an improvement
 
 
 def format_dataset(example, tokenizer):
@@ -204,14 +211,16 @@ def save_training_report(
     eval_logs = [log for log in logs if "eval_loss" in log]
 
     # Determine report filename
-    if trial_number is not None:
+    if hyperparameters and "run_name" in hyperparameters:
+        report_filename = f"training_report_{hyperparameters['run_name']}.txt"
+    elif trial_number is not None:
         report_filename = f"training_report_trial_{trial_number}.txt"
     else:
         report_filename = "training_report_final.txt"
 
     report_path = os.path.join(output_dir, report_filename)
 
-    with open(report_path, "w") as f:
+    with open(report_path, "w", encoding="utf-8") as f:
         f.write("=" * 80 + "\n")
         f.write("TRAINING REPORT\n")
         f.write("=" * 80 + "\n\n")
@@ -363,8 +372,11 @@ def plot_training_results(trainer_state, output_dir):
 def hyperparameter_space(trial):
     """Defines the hyperparameter search space for optuna."""
     return {
-        "learning_rate": trial.suggest_float("learning_rate", 1e-4, 5e-4, log=True),
-        "warmup_ratio": trial.suggest_float("warmup_ratio", 0.03, 0.1),
+        # Increased learning rate range - model needs to learn more
+        "learning_rate": trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True),
+        "warmup_ratio": trial.suggest_float("warmup_ratio", 0.05, 0.15),
+        # Weight decay for regularization (prevents output collapse)
+        "weight_decay": trial.suggest_float("weight_decay", 0.0, 0.05),
         # Note: per_device_train_batch_size must be a power of 2 for efficiency
         "per_device_train_batch_size": trial.suggest_categorical(
             "per_device_train_batch_size", [2, 4, 8]
@@ -388,10 +400,13 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    train_path = TRAIN_DATA_PATH
+    val_path = VALIDATION_DATA_PATH
+
     # Load tokenizer and datasets
     _, tokenizer = load_model_and_tokenizer()
-    train_dataset = load_and_prepare_dataset(tokenizer, TRAIN_DATA_PATH)
-    validation_dataset = load_and_prepare_dataset(tokenizer, VALIDATION_DATA_PATH)
+    train_dataset = load_and_prepare_dataset(tokenizer, train_path)
+    validation_dataset = load_and_prepare_dataset(tokenizer, val_path)
 
     if args.hyper:
         # --- HYPERPARAMETER SEARCH MODE ---
@@ -439,21 +454,141 @@ if __name__ == "__main__":
 
         print("--- Hyperparameter Search Complete ---")
         print(f"Best run found: {best_run}")
-
-        # Update training arguments with the best hyperparameters
-        final_training_args = TrainingArguments(**TRAINING_ARGS)
-        final_training_args.learning_rate = best_run.hyperparameters["learning_rate"]
-        # num_train_epochs is not in search space, use default from TRAINING_ARGS
-        final_training_args.warmup_ratio = best_run.hyperparameters["warmup_ratio"]
-        final_training_args.per_device_train_batch_size = best_run.hyperparameters[
-            "per_device_train_batch_size"
-        ]
-
-        print(f"\n--- Training Final Model with Best Hyperparameters ---")
-        print(f"Learning Rate: {final_training_args.learning_rate}")
-        print(f"Epochs: {final_training_args.num_train_epochs}")
-        print(f"Warmup Ratio: {final_training_args.warmup_ratio}")
-        print(f"Batch Size: {final_training_args.per_device_train_batch_size}")
+        print(f"\nBest Hyperparameters:")
+        print(f"  Learning Rate: {best_run.hyperparameters['learning_rate']}")
+        print(f"  Warmup Ratio: {best_run.hyperparameters['warmup_ratio']}")
+        print(f"  Batch Size: {best_run.hyperparameters['per_device_train_batch_size']}")
+        print(f"  Objective (eval_loss): {best_run.objective}")
+        
+        # Generate plots and reports for each run
+        print("\n--- Generating Reports for All Runs ---")
+        for item in sorted(os.listdir(OUTPUT_DIR)):
+            item_path = os.path.join(OUTPUT_DIR, item)
+            if os.path.isdir(item_path) and item.startswith("run-"):
+                # Find the final checkpoint
+                checkpoints = []
+                for subitem in os.listdir(item_path):
+                    if subitem.startswith("checkpoint-"):
+                        try:
+                            checkpoint_num = int(subitem.split("-")[1])
+                            checkpoints.append((checkpoint_num, subitem))
+                        except (IndexError, ValueError):
+                            pass
+                
+                if checkpoints:
+                    checkpoints.sort(key=lambda x: x[0])
+                    final_checkpoint = checkpoints[-1][1]
+                    checkpoint_path = os.path.join(item_path, final_checkpoint)
+                    
+                    # Load trainer state from checkpoint
+                    state_file = os.path.join(checkpoint_path, "trainer_state.json")
+                    if os.path.exists(state_file):
+                        with open(state_file, 'r') as f:
+                            state_dict = json.load(f)
+                        
+                        # Create a minimal TrainerState object
+                        from transformers.trainer_callback import TrainerState
+                        state = TrainerState(**state_dict)
+                        
+                        # Generate plots
+                        plot_training_results(state, checkpoint_path)
+                        
+                        # Generate report
+                        run_hyperparams = {
+                            "run_name": item,
+                            "checkpoint": final_checkpoint,
+                            "lora_r": LORA_R,
+                            "lora_alpha": LORA_ALPHA,
+                            "lora_dropout": LORA_DROPOUT,
+                        }
+                        save_training_report(state, checkpoint_path, hyperparameters=run_hyperparams)
+                        print(f"  Generated report for {item}/{final_checkpoint}")
+        
+        # Collect metrics from all runs for comprehensive report
+        print("\n--- Collecting Metrics from All Runs ---")
+        all_run_metrics = []
+        for item in sorted(os.listdir(OUTPUT_DIR)):
+            item_path = os.path.join(OUTPUT_DIR, item)
+            if os.path.isdir(item_path) and item.startswith("run-"):
+                checkpoints = []
+                for subitem in os.listdir(item_path):
+                    if subitem.startswith("checkpoint-"):
+                        try:
+                            checkpoint_num = int(subitem.split("-")[1])
+                            checkpoints.append((checkpoint_num, subitem))
+                        except (IndexError, ValueError):
+                            pass
+                
+                if checkpoints:
+                    checkpoints.sort(key=lambda x: x[0])
+                    final_checkpoint = checkpoints[-1][1]
+                    checkpoint_path = os.path.join(item_path, final_checkpoint)
+                    state_file = os.path.join(checkpoint_path, "trainer_state.json")
+                    
+                    if os.path.exists(state_file):
+                        with open(state_file, 'r') as f:
+                            state_dict = json.load(f)
+                        
+                        # Extract key metrics
+                        log_history = state_dict.get('log_history', [])
+                        eval_logs = [log for log in log_history if 'eval_loss' in log]
+                        
+                        if eval_logs:
+                            final_eval = eval_logs[-1]
+                            all_run_metrics.append({
+                                'run_name': item,
+                                'eval_loss': final_eval.get('eval_loss', float('inf')),
+                                'valid_action_rate': final_eval.get('eval_valid_action_rate', 0.0),
+                                'correct_action_rate': final_eval.get('eval_correct_action_rate', 0.0),
+                                'action_diversity': final_eval.get('eval_action_diversity', 0.0),
+                            })
+        
+        # Generate comprehensive final report
+        final_report_path = os.path.join(OUTPUT_DIR, "TRAINING_REPORT_FINAL.txt")
+        with open(final_report_path, 'w', encoding='utf-8') as f:
+            f.write("="*70 + "\n")
+            f.write("FINAL TRAINING REPORT - HYPERPARAMETER SEARCH\n")
+            f.write("="*70 + "\n\n")
+            
+            f.write(f"Number of Trials: {args.trials}\n")
+            f.write(f"Best Run: {best_run.run_id}\n")
+            f.write(f"Best Objective (eval_loss): {best_run.objective:.4f}\n\n")
+            
+            f.write("Best Hyperparameters:\n")
+            f.write("-" * 70 + "\n")
+            f.write(f"  Learning Rate: {best_run.hyperparameters['learning_rate']:.2e}\n")
+            f.write(f"  Warmup Ratio: {best_run.hyperparameters['warmup_ratio']:.4f}\n")
+            f.write(f"  Weight Decay: {best_run.hyperparameters['weight_decay']:.4f}\n")
+            f.write(f"  Batch Size: {best_run.hyperparameters['per_device_train_batch_size']}\n\n")
+            
+            f.write("All Runs Performance:\n")
+            f.write("="*70 + "\n")
+            f.write(f"{'Run':<10} {'Eval Loss':<12} {'Valid %':<10} {'Correct %':<12} {'Diversity':<10}\n")
+            f.write("-"*70 + "\n")
+            
+            # Sort by eval_loss (best first)
+            all_run_metrics.sort(key=lambda x: x['eval_loss'])
+            
+            for metrics in all_run_metrics:
+                f.write(f"{metrics['run_name']:<10} ")
+                f.write(f"{metrics['eval_loss']:<12.4f} ")
+                f.write(f"{metrics['valid_action_rate']*100:<10.1f} ")
+                f.write(f"{metrics['correct_action_rate']*100:<12.1f} ")
+                f.write(f"{metrics['action_diversity']:<10.2f}\n")
+            
+            f.write("\n" + "="*70 + "\n")
+            f.write("\nNotes:\n")
+            f.write("- Eval Loss: Lower is better\n")
+            f.write("- Valid %: Percentage of outputs that are valid actions\n")
+            f.write("- Correct %: Percentage of outputs that match expected action\n")
+            f.write("- Diversity: Number of unique actions produced (max 5)\n")
+            f.write("\nEach run's detailed report: training_report_run-X.txt\n")
+            f.write("Use evaluate_model.py for test set evaluation.\n")
+        
+        print(f"\nTraining report saved to: {final_report_path}")
+        print("\n--- Fine-Tuning Process Complete ---")
+        print("All runs have been saved. Use evaluate_model.py to compare them.")
+        
     else:
         # --- NORMAL TRAINING MODE ---
         print("--- Starting Normal Training (no hyperparameter search) ---")
@@ -462,50 +597,50 @@ if __name__ == "__main__":
         print(f"Learning Rate: {final_training_args.learning_rate}")
         print(f"Epochs: {final_training_args.num_train_epochs}")
 
-    # Load a fresh model for final training
-    final_model = model_init()
+        # Load a fresh model for final training
+        final_model = model_init()
 
-    # Create compute_metrics function with tokenizer in closure
-    compute_metrics_fn = create_compute_metrics(tokenizer)
+        # Create compute_metrics function with tokenizer in closure
+        compute_metrics_fn = create_compute_metrics(tokenizer)
 
-    # Train the model (no early stopping needed for 1 epoch)
-    final_trainer = SFTTrainer(
-        model=final_model,
-        train_dataset=train_dataset,
-        eval_dataset=validation_dataset,
-        dataset_text_field="text",
-        max_seq_length=512,
-        tokenizer=tokenizer,
-        args=final_training_args,
-        packing=False,
-        compute_metrics=compute_metrics_fn,
-        data_collator=DataCollatorForCompletionOnlyLM(
-            response_template="<|im_start|>assistant", tokenizer=tokenizer
-        ),
-    )
+        # Train the model (no early stopping needed for 1 epoch)
+        final_trainer = SFTTrainer(
+            model=final_model,
+            train_dataset=train_dataset,
+            eval_dataset=validation_dataset,
+            dataset_text_field="text",
+            max_seq_length=512,
+            tokenizer=tokenizer,
+            args=final_training_args,
+            packing=False,
+            compute_metrics=compute_metrics_fn,
+            data_collator=DataCollatorForCompletionOnlyLM(
+                response_template="<|im_start|>assistant", tokenizer=tokenizer
+            ),
+        )
 
-    final_trainer.train()
+        final_trainer.train()
 
-    print("--- Training Finished ---")
-    final_trainer.save_model(OUTPUT_DIR)
-    print(f"Model saved to: {OUTPUT_DIR}")
+        print("--- Training Finished ---")
+        final_trainer.save_model(OUTPUT_DIR)
+        print(f"Model saved to: {OUTPUT_DIR}")
 
-    # Generate training plots
-    plot_training_results(final_trainer.state, OUTPUT_DIR)
+        # Generate training plots
+        plot_training_results(final_trainer.state, OUTPUT_DIR)
 
-    # Generate detailed training report
-    hyperparams_used = {
-        "learning_rate": final_training_args.learning_rate,
-        "num_train_epochs": final_training_args.num_train_epochs,
-        "warmup_ratio": final_training_args.warmup_ratio,
-        "per_device_train_batch_size": final_training_args.per_device_train_batch_size,
-        "gradient_accumulation_steps": final_training_args.gradient_accumulation_steps,
-        "lora_r": LORA_R,
-        "lora_alpha": LORA_ALPHA,
-        "lora_dropout": LORA_DROPOUT,
-    }
-    save_training_report(
-        final_trainer.state, OUTPUT_DIR, hyperparameters=hyperparams_used
-    )
+        # Generate detailed training report
+        hyperparams_used = {
+            "learning_rate": final_training_args.learning_rate,
+            "num_train_epochs": final_training_args.num_train_epochs,
+            "warmup_ratio": final_training_args.warmup_ratio,
+            "per_device_train_batch_size": final_training_args.per_device_train_batch_size,
+            "gradient_accumulation_steps": final_training_args.gradient_accumulation_steps,
+            "lora_r": LORA_R,
+            "lora_alpha": LORA_ALPHA,
+            "lora_dropout": LORA_DROPOUT,
+        }
+        save_training_report(
+            final_trainer.state, OUTPUT_DIR, hyperparameters=hyperparams_used
+        )
 
-    print("--- Fine-Tuning Process Complete ---")
+        print("--- Fine-Tuning Process Complete ---")

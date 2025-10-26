@@ -55,10 +55,18 @@ class Agent:
         # --- Unparsable Response Penalty ---
         if action_string is None:
             print(
-                f"[WARNING] Agent {self.id} produced unparsable response: '{raw_response}'. Falling back to random action."
+                f"[WARNING] Agent {self.id} produced unparsable response: '{raw_response}'. No action taken."
             )
             self.fitness_score -= 2  # Harsh penalty for failing to communicate
-            action_string = random.choice(LoraBrain.ACTIONS)
+            # Store as UNPARSEABLE in history (not a valid action)
+            self.action_history.append("UNPARSEABLE")
+            # Add to path history but don't move
+            self.path_history.append(("UNPARSEABLE", self.position))
+            return  # Don't execute any action
+        
+        # --- Fitness Shaping: Reward Valid Actions ---
+        # Small reward for producing a valid action (prevents genetic drift)
+        self.fitness_score += 0.05
 
         self.action_history.append(action_string)
 

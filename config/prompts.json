@@ -1,5 +1,5 @@
 {
-    "SYSTEM_PROMPT": "You are a simple robot agent. You exist within a grid. Your goal is to navigate to the 'R' (resource). Your only possible outputs are the single words: 'North', 'South', 'East', 'West', 'Gather'.",
+    "SYSTEM_PROMPT": "Navigate a grid to reach resources. Output exactly ONE word: North, South, East, West, or Gather.",
     "VALID_ACTIONS": [
         "North",
         "South",

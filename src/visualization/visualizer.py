@@ -45,9 +45,12 @@ class Visualizer:
             save_as_gif (bool): If True, saves the animation as a GIF.
         """
         paths = self.data["champion_paths_by_gen"].get(str(generation))
-        if not paths or len(paths) < n:
-            print(f"Error: Not enough champion paths for generation {generation} (found {len(paths)}).")
+        if paths is None:
+            print(f"Error: No champion paths found for generation {generation}.")
             return
+        if len(paths) < n:
+            print(f"Warning: Only {len(paths)} champion paths for generation {generation}, showing all.")
+            n = len(paths)  # Show all available paths
 
         fig, ax = plt.subplots(figsize=(10, 10))
         ax.set_title(f"Top {n} Champion Paths - Generation {generation}")
@@ -73,8 +76,10 @@ class Visualizer:
         # Add gather markers (shared across all agents)
         (success_markers,) = ax.plot([], [], 'g*', markersize=12, label="Gather Success", linestyle='None')
         (fail_markers,) = ax.plot([], [], 'rx', markersize=10, label="Gather Fail", linestyle='None')
+        (unparseable_markers,) = ax.plot([], [], 'o', color='orange', markersize=8, label="Unparseable", linestyle='None', alpha=0.7)
         successful_gather_coords = set()
         unsuccessful_gather_coords = set()
+        unparseable_coords = set()
 
         ax.legend()
 
@@ -87,7 +92,8 @@ class Visualizer:
                 path_lines[i].set_data([], [])
             success_markers.set_data([], [])
             fail_markers.set_data([], [])
-            return agent_markers + path_lines + [success_markers, fail_markers]
+            unparseable_markers.set_data([], [])
+            return agent_markers + path_lines + [success_markers, fail_markers, unparseable_markers]
 
         def update(frame):
             for i in range(n):
@@ -97,11 +103,13 @@ class Visualizer:
                     x, y = pos
                     agent_markers[i].set_data([y], [x])
                     
-                    # Check for GATHER actions
+                    # Check for special actions
                     if action == "GATHER_SUCCESS":
                         successful_gather_coords.add(tuple(pos))
                     elif action == "GATHER_FAIL":
                         unsuccessful_gather_coords.add(tuple(pos))
+                    elif action == "UNPARSEABLE":
+                        unparseable_coords.add(tuple(pos))
 
                     # Draw path up to current frame
                     path_positions = [p[1] for p in path[: frame + 1]]
@@ -116,8 +124,11 @@ class Visualizer:
             if unsuccessful_gather_coords:
                 fail_y, fail_x = zip(*unsuccessful_gather_coords)
                 fail_markers.set_data(fail_x, fail_y)
+            if unparseable_coords:
+                unparseable_y, unparseable_x = zip(*unparseable_coords)
+                unparseable_markers.set_data(unparseable_x, unparseable_y)
             
-            return agent_markers + path_lines + [success_markers, fail_markers]
+            return agent_markers + path_lines + [success_markers, fail_markers, unparseable_markers]
 
         ani = animation.FuncAnimation(
             fig, update, frames=max_frames, init_func=init, blit=True, interval=150
@@ -182,26 +193,33 @@ class Visualizer:
         (fail_markers,) = ax.plot(
             [], [], "rx", markersize=8, label="Gather Fail", linestyle='None'
         )
+        (unparseable_markers,) = ax.plot(
+            [], [], "o", color='orange', markersize=6, label="Unparseable", linestyle='None', alpha=0.7
+        )
         successful_gather_coords = set()
         unsuccessful_gather_coords = set()
+        unparseable_coords = set()
 
         def init():
             agent_marker.set_data([], [])
             path_line.set_data([], [])
             success_markers.set_data([], [])
             fail_markers.set_data([], [])
-            return agent_marker, path_line, success_markers, fail_markers
+            unparseable_markers.set_data([], [])
+            return agent_marker, path_line, success_markers, fail_markers, unparseable_markers
 
         def update(frame):
             action, pos = path[frame]
             x, y = pos
             agent_marker.set_data([y], [x])
 
-            # Check for GATHER actions
+            # Check for special actions
             if action == "GATHER_SUCCESS":
                 successful_gather_coords.add(tuple(pos))
             elif action == "GATHER_FAIL":
                 unsuccessful_gather_coords.add(tuple(pos))
+            elif action == "UNPARSEABLE":
+                unparseable_coords.add(tuple(pos))
 
             # Update success markers
             if successful_gather_coords:
@@ -212,6 +230,11 @@ class Visualizer:
             if unsuccessful_gather_coords:
                 fail_y, fail_x = zip(*unsuccessful_gather_coords)
                 fail_markers.set_data(fail_x, fail_y)
+            
+            # Update unparseable markers
+            if unparseable_coords:
+                unparseable_y, unparseable_x = zip(*unparseable_coords)
+                unparseable_markers.set_data(unparseable_x, unparseable_y)
 
             # Draw the path up to the current frame
             path_positions = [p[1] for p in path[: frame + 1]]
@@ -219,7 +242,7 @@ class Visualizer:
             path_x_coords = [p[1] for p in path_positions]
             path_line.set_data(path_x_coords, path_y_coords)
 
-            return agent_marker, path_line, success_markers, fail_markers
+            return agent_marker, path_line, success_markers, fail_markers, unparseable_markers
 
         ani = animation.FuncAnimation(
             fig,

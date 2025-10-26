@@ -106,7 +106,12 @@ ACTION:"""
             base_model.device
         )
         with torch.no_grad():
-            outputs = base_model.generate(**model_inputs, max_new_tokens=10)
+            outputs = base_model.generate(
+                **model_inputs,
+                max_new_tokens=10,
+                do_sample=False,  # Use greedy decoding for deterministic outputs
+                pad_token_id=tokenizer.eos_token_id,
+            )
         # For chat templates, we need to decode only the newly generated tokens
         response_ids = outputs[0][model_inputs.input_ids.shape[-1] :]
         newly_generated_text = tokenizer.decode(response_ids, skip_special_tokens=True)

@@ -1,6 +1,8 @@
 # Custom
 output/
 data/
+weights/
+run-*/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

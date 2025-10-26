@@ -1,19 +1,17 @@
 import json
 import random
 import os
+import argparse
 from itertools import combinations
 from collections import defaultdict
+import sys
 
-SYSTEM_PROMPT = """You are a simple robot agent. You exist within a grid. Your goal is to navigate to the 'R' (resource). Your only possible outputs are the single words: 'North', 'South', 'East', 'West', 'Gather'."""
-VALID_ACTIONS = ["North", "South", "East", "West", "Gather"]
+# Add parent directory to path to import config_loader
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from config_loader import SYSTEM_PROMPT, VALID_ACTIONS
 
-# --- Configuration ---
-# You can easily control the final dataset size and balance from here.
-NUM_GATHER_EXAMPLES = 5
-NUM_ADJACENT_MOVE_EXAMPLES = 8  # Creates 8 examples for each of 4 directions (N,S,E,W)
-NUM_DIAGONAL_MOVE_EXAMPLES = 4  # Creates 4 examples for each of 4 corners (NW,NE,SW,SE)
 GRID_SIZE = 3
-OUTPUT_FILE = "data/finetuning_data.json"
+OUTPUT_DIR = "data"
 
 
 def _generate_all_distractor_combinations(safe_spots, min_walls=1, max_walls=3):
@@ -42,7 +40,81 @@ def _add_distractors(grid, unsafe_coords, distractor_positions):
     return grid_copy
 
 
-def _generate_forced_scenario(scenario_type, orientation):
+def _get_all_wall_patterns():
+    """
+    Returns 9 wall patterns:
+    - No walls
+    - 4 single sides (N, S, E, W)
+    - 4 corner patterns (NW, NE, SW, SE)
+    """
+    return [
+        [],  # No walls
+        [(0, 0), (0, 1), (0, 2)],  # North wall
+        [(2, 0), (2, 1), (2, 2)],  # South wall
+        [(0, 2), (1, 2), (2, 2)],  # East wall
+        [(0, 0), (1, 0), (2, 0)],  # West wall
+        [(0, 0), (0, 1), (0, 2), (1, 0), (2, 0)],  # North + West (NW corner)
+        [(0, 0), (0, 1), (0, 2), (1, 2), (2, 2)],  # North + East (NE corner)
+        [(2, 0), (2, 1), (2, 2), (1, 0), (0, 0)],  # South + West (SW corner)
+        [(2, 0), (2, 1), (2, 2), (1, 2), (0, 2)],  # South + East (SE corner)
+    ]
+
+
+def _is_wall_pattern_valid(wall_positions, unsafe_coords):
+    """
+    Check if a wall pattern is valid (doesn't block unsafe coordinates).
+    
+    Args:
+        wall_positions: List of (row, col) tuples for wall positions
+        unsafe_coords: List of (row, col) tuples that must remain clear
+    
+    Returns:
+        True if pattern is valid, False otherwise
+    """
+    for wall_pos in wall_positions:
+        if wall_pos in unsafe_coords:
+            return False
+    return True
+
+
+def _get_valid_history_actions(wall_positions):
+    """
+    Get valid single-action history based on wall positions.
+    Agent couldn't have come from a direction that has walls.
+    
+    Args:
+        wall_positions: List of (row, col) tuples for wall positions
+    
+    Returns:
+        List of valid movement actions (N, S, E, W) - no Gather
+    """
+    # Check which directions have walls
+    blocked_directions = []
+    
+    # North wall (row 0)
+    if any(pos[0] == 0 for pos in wall_positions):
+        blocked_directions.append("North")
+    
+    # South wall (row 2)
+    if any(pos[0] == 2 for pos in wall_positions):
+        blocked_directions.append("South")
+    
+    # East wall (col 2)
+    if any(pos[1] == 2 for pos in wall_positions):
+        blocked_directions.append("East")
+    
+    # West wall (col 0)
+    if any(pos[1] == 0 for pos in wall_positions):
+        blocked_directions.append("West")
+    
+    # Return valid movement actions (no Gather)
+    movement_actions = ["North", "South", "East", "West"]
+    valid_actions = [action for action in movement_actions if action not in blocked_directions]
+    
+    return valid_actions if valid_actions else movement_actions  # Fallback to all if none valid
+
+
+def _generate_forced_scenario(scenario_type, orientation, include_history=True):
     """
     Constructs a grid where a specific action is the only logical choice,
     based on the scenario type and a given orientation.
@@ -106,37 +178,42 @@ def _format_user_prompt(grid, history):
     """Helper function to format the user part of the prompt."""
     grid_str = "\n".join(" ".join(row) for row in grid)
 
-    history_str = "\n".join(f"- {h}" for h in history)
-
-    return f"""PERCEPTION:
+    # Only include history section if history is provided
+    if history:
+        history_str = "\n".join(f"- {h}" for h in history)
+        return f"""PERCEPTION:
 {grid_str}
 
 HISTORY (Last 3 actions):
 {history_str}
 
 ACTION:"""
+    else:
+        return f"""PERCEPTION:
+{grid_str}
+
+ACTION:"""
 
 
-def generate_dataset():
+def generate_dataset(include_history=True):
     """Generates a dataset with all possible distractor combinations for each scenario."""
     print("Generating dataset with exhaustive distractor combinations...")
 
+    # Define all scenarios to generate
     tasks = []
-    # 1. Gather Scenarios
-    for _ in range(NUM_GATHER_EXAMPLES):
-        tasks.append(("GATHER", None))
+    
+    # 1. Gather Scenario (agent on resource)
+    tasks.append(("GATHER", None))
 
-    # 2. Adjacent Move Scenarios
+    # 2. Adjacent Move Scenarios (resource 1 step away: N, S, E, W)
     adjacent_orientations = [(0, 1), (2, 1), (1, 2), (1, 0)]  # N, S, E, W
-    for _ in range(NUM_ADJACENT_MOVE_EXAMPLES):
-        for orientation in adjacent_orientations:
-            tasks.append(("ADJACENT_MOVE", orientation))
+    for orientation in adjacent_orientations:
+        tasks.append(("ADJACENT_MOVE", orientation))
 
-    # 3. Diagonal Move Scenarios
+    # 3. Diagonal Move Scenarios (resource diagonal: NW, NE, SW, SE)
     diagonal_orientations = [(0, 0), (0, 2), (2, 0), (2, 2)]  # NW, NE, SW, SE
-    for _ in range(NUM_DIAGONAL_MOVE_EXAMPLES):
-        for orientation in diagonal_orientations:
-            tasks.append(("DIAGONAL_MOVE", orientation))
+    for orientation in diagonal_orientations:
+        tasks.append(("DIAGONAL_MOVE", orientation))
 
     final_dataset = []
     action_to_examples = defaultdict(
@@ -147,17 +224,36 @@ def generate_dataset():
     for scenario_type, orientation in tasks:
         # Get the base grid and safe spots
         base_grid, action, safe_spots = _generate_forced_scenario(
-            scenario_type, orientation
+            scenario_type, orientation, include_history
         )
 
-        # Generate all possible distractor combinations
-        distractor_combos = _generate_all_distractor_combinations(
-            safe_spots, min_walls=1, max_walls=3
-        )
-
-        # If no safe spots, just use the base grid with no distractors
-        if not distractor_combos:
-            distractor_combos = [[]]
+        # Use systematic wall patterns (9 configurations: no walls + 8 wall patterns)
+        all_wall_patterns = _get_all_wall_patterns()
+        distractor_combos = []
+        
+        # Get unsafe coordinates (agent, resource, and paths)
+        unsafe_coords = []
+        if scenario_type == "GATHER":
+            unsafe_coords.append((1, 1))  # Resource at center
+        else:
+            unsafe_coords.append((1, 1))  # Agent at center
+            unsafe_coords.append(orientation)  # Resource position
+            
+            # For diagonal moves, keep both paths clear
+            if scenario_type == "DIAGONAL_MOVE":
+                if orientation == (0, 0):  # NW
+                    unsafe_coords.extend([(0, 1), (1, 0)])
+                elif orientation == (0, 2):  # NE
+                    unsafe_coords.extend([(0, 1), (1, 2)])
+                elif orientation == (2, 0):  # SW
+                    unsafe_coords.extend([(2, 1), (1, 0)])
+                elif orientation == (2, 2):  # SE
+                    unsafe_coords.extend([(2, 1), (1, 2)])
+        
+        # Filter valid wall patterns
+        for wall_pattern in all_wall_patterns:
+            if _is_wall_pattern_valid(wall_pattern, unsafe_coords):
+                distractor_combos.append(wall_pattern)
 
         for distractor_positions in distractor_combos:
             grid = _add_distractors(base_grid, [], distractor_positions)
@@ -168,51 +264,74 @@ def generate_dataset():
 
             seen_grids.add(grid_tuple)
 
-            # Generate a random history for variety
-            history = random.choices(VALID_ACTIONS, k=3)
-            user_prompt_string = _format_user_prompt(grid, history)
+            # Generate examples based on history flag
+            if include_history:
+                # Create one example for EACH valid history action
+                valid_history_actions = _get_valid_history_actions(distractor_positions)
+                
+                if valid_history_actions:
+                    # Generate an example for each valid history action
+                    for history_action in valid_history_actions:
+                        history = [history_action]
+                        user_prompt_string = _format_user_prompt(grid, history)
 
-            example = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt_string},
-                {"role": "assistant", "content": action},
-            ]
+                        example = [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": user_prompt_string},
+                            {"role": "assistant", "content": action},
+                        ]
 
-            final_dataset.append(example)
-            action_to_examples[action].append(example)
+                        final_dataset.append(example)
+                        action_to_examples[action].append(example)
+                else:
+                    # No valid history - create example without history
+                    history = []
+                    user_prompt_string = _format_user_prompt(grid, history)
 
-    print(f"\nGenerated {len(final_dataset)} total examples (before balancing)")
-    print("Action distribution (before balancing):")
+                    example = [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt_string},
+                        {"role": "assistant", "content": action},
+                    ]
+
+                    final_dataset.append(example)
+                    action_to_examples[action].append(example)
+            else:
+                # No history mode - single example per grid
+                history = []
+                user_prompt_string = _format_user_prompt(grid, history)
+
+                example = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt_string},
+                    {"role": "assistant", "content": action},
+                ]
+
+                final_dataset.append(example)
+                action_to_examples[action].append(example)
+
+    print(f"\nGenerated {len(final_dataset)} total examples")
+    print("Action distribution:")
     for action in sorted(action_to_examples.keys()):
-        print(f"  {action}: {len(action_to_examples[action])} examples")
+        pct = (len(action_to_examples[action]) / len(final_dataset)) * 100
+        print(f"  {action}: {len(action_to_examples[action])} examples ({pct:.1f}%)")
 
-    # Balance the dataset: ensure all actions have the same number of examples
-    min_count = min(len(examples) for examples in action_to_examples.values())
-    print(f"\nBalancing dataset to {min_count} examples per action...")
-
-    balanced_action_to_examples = {}
-    for action, examples in action_to_examples.items():
-        # Randomly sample to match the minimum count
-        if len(examples) > min_count:
-            balanced_action_to_examples[action] = random.sample(examples, min_count)
-        else:
-            balanced_action_to_examples[action] = examples
-
-    # Rebuild final dataset from balanced examples
-    final_dataset = []
-    for examples in balanced_action_to_examples.values():
-        final_dataset.extend(examples)
-
-    print(f"\nFinal balanced dataset: {len(final_dataset)} total examples")
-    print("Action distribution (after balancing):")
-    for action in sorted(balanced_action_to_examples.keys()):
-        print(f"  {action}: {len(balanced_action_to_examples[action])} examples")
-
-    return final_dataset, balanced_action_to_examples
+    return final_dataset, action_to_examples
 
 
 if __name__ == "__main__":
-    full_dataset, action_to_examples = generate_dataset()
+    parser = argparse.ArgumentParser(description="Generate fine-tuning dataset")
+    parser.add_argument(
+        "--include-history",
+        action="store_true",
+        help="Include history in examples (default: no history for simplicity)",
+    )
+    args = parser.parse_args()
+    
+    mode = "with history" if args.include_history else "without history (perception only)"
+    print(f"Generating dataset ({mode})...\n")
+    
+    full_dataset, action_to_examples = generate_dataset(include_history=args.include_history)
 
     # Stratified split: maintain action distribution across splits
     train_dataset = []
@@ -244,13 +363,12 @@ if __name__ == "__main__":
     random.shuffle(test_dataset)
 
     # Define output directory and filenames
-    output_dir = os.path.dirname(OUTPUT_FILE)
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
 
-    train_file = os.path.join(output_dir, "train_data.json")
-    val_file = os.path.join(output_dir, "validation_data.json")
-    test_file = os.path.join(output_dir, "test_data.json")
+    train_file = os.path.join(OUTPUT_DIR, "train_data.json")
+    val_file = os.path.join(OUTPUT_DIR, "validation_data.json")
+    test_file = os.path.join(OUTPUT_DIR, "test_data.json")
 
     # Save the datasets
     with open(train_file, "w") as f:
