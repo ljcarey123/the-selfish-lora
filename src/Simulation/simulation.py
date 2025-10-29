@@ -164,11 +164,18 @@ class Simulation:
                 parent = parent_weights_list[i % len(parent_weights_list)]
                 parent_weights = parent["weights"]
                 
+                # Variable noise strategy: some agents very similar, some more different
+                # Use exponential distribution: most agents close to parent, few far away
+                # Range: 0.1x to 3x the base initial_noise
+                noise_multiplier = np.random.exponential(scale=1.0)
+                noise_multiplier = np.clip(noise_multiplier, 0.1, 3.0)
+                agent_noise = self.initial_noise * noise_multiplier
+                
                 brain_weights = brain.get_weights()
                 for name in brain_weights:
                     if name in parent_weights:
-                        # Start with parent weights and add small random noise
-                        noise = torch.randn_like(parent_weights[name]) * self.initial_noise
+                        # Apply variable noise
+                        noise = torch.randn_like(parent_weights[name]) * agent_noise
                         brain_weights[name] = parent_weights[name].clone() + noise
                 brain.set_weights(brain_weights)
 
@@ -184,13 +191,15 @@ class Simulation:
 
         if parent_weights_list:
             if len(parent_weights_list) > 1:
-                print(f"Initialized {self.population_size} agents from {len(parent_weights_list)} parent models + {self.initial_noise*100:.1f}% noise")
+                print(f"Initialized {self.population_size} agents from {len(parent_weights_list)} parent models")
+                print(f"  Variable noise: {self.initial_noise*0.1*100:.2f}% to {self.initial_noise*3.0*100:.1f}% (exponential distribution)")
                 # Show distribution
                 for j, parent in enumerate(parent_weights_list):
                     count = sum(1 for i in range(self.population_size) if i % len(parent_weights_list) == j)
                     print(f"  {parent['name']}: {count} agents")
             else:
-                print(f"Initialized {self.population_size} agents with fine-tuned weights + {self.initial_noise*100:.1f}% noise")
+                print(f"Initialized {self.population_size} agents with fine-tuned weights")
+                print(f"  Variable noise: {self.initial_noise*0.1*100:.2f}% to {self.initial_noise*3.0*100:.1f}% (exponential distribution)")
         else:
             print(f"Initialized {self.population_size} agents with random weights")
 

@@ -1,10 +1,24 @@
 {
-    "SYSTEM_PROMPT": "Navigate a grid to reach resources. Output exactly ONE word: North, South, East, West, or Gather.",
-    "VALID_ACTIONS": [
-        "North",
-        "South",
-        "East",
-        "West",
-        "Gather"
-    ]
+  "SYSTEM_PROMPT": "You are an agent in a resource gathering simulation. Your goal is to gather resources while managing your energy. You can see a 5x5 grid with you (A) at the center. Available actions are: move_north, move_south, move_east, move_west, gather, stand_still. Consider your energy level and recent actions when choosing your next move.",
+  "VALID_ACTIONS": [
+    "move_north",
+    "move_south",
+    "move_east",
+    "move_west",
+    "gather",
+    "stand_still"
+  ],
+  "ENERGY_LEVELS": {
+    "low": "Energy is low (<20%)",
+    "medium": "Energy is medium (20-60%)",
+    "high": "Energy is high (>60%)"
+  },
+  "GRID_SYMBOLS": {
+    "agent": "A",
+    "resource": "R",
+    "on_resource": "@",
+    "wall": "W",
+    "rival": "E",
+    "empty": "."
+  }
 }

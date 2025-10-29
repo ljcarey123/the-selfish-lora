@@ -102,6 +102,15 @@ ACTION:"""
         prompt_string = tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
+        
+        # Debug: Print the full prompt being sent to the model
+        print("\n" + "="*80)
+        print("DEBUG - FULL PROMPT:")
+        print("-"*40)
+        print(f"SYSTEM: {system_prompt}")
+        print(f"USER: {user_prompt}")
+        print("-"*40 + "\n")
+        
         model_inputs = tokenizer(prompt_string, return_tensors="pt").to(
             base_model.device
         )
@@ -115,8 +124,18 @@ ACTION:"""
         # For chat templates, we need to decode only the newly generated tokens
         response_ids = outputs[0][model_inputs.input_ids.shape[-1] :]
         newly_generated_text = tokenizer.decode(response_ids, skip_special_tokens=True)
+        
+        # Debug: Print the raw model response
+        print("DEBUG - MODEL RESPONSE:")
+        print("-"*40)
+        print(f"{newly_generated_text}")
+        print("="*80 + "\n")
 
         # 4. Parse the response
         chosen_action = self._parse_llm_response(newly_generated_text)
+        
+        # Debug: Print the parsed action
+        print(f"DEBUG - PARSED ACTION: {chosen_action}")
+        print("="*80 + "\n")
 
         return chosen_action, newly_generated_text

@@ -203,14 +203,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sparse-mutation-rate",
         type=float,
-        default=0.1,  # 10% of weights selected
-        help="Fraction of weights selected for Gaussian-weighted mutation (default: 0.1 = 10%%).",
+        default=0.2,  # 20% of weights selected
+        help="Fraction of weights selected for Gaussian-weighted mutation (default: 0.2 = 20%%).",
     )
     parser.add_argument(
         "--weight-regularization",
         type=float,
-        default=0.001,  # 0.1% pull back
-        help="Pull weights back toward initial fine-tuned values (default: 0.001 = 0.1%%). Prevents genetic drift.",
+        default=0.0005,  # 0.05% pull back (reduced since more weights mutating)
+        help="Pull weights back toward initial fine-tuned values (default: 0.0005 = 0.05%%). Prevents genetic drift.",
     )
     args = parser.parse_args()
 
