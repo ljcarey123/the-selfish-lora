@@ -42,9 +42,15 @@ LORA_TARGET_MODULES = [
 TRAINING_ARGS = {
     # Core training settings
     "output_dir": OUTPUT_DIR,
-    "num_train_epochs": 3,  # More epochs to allow learning, with early stopping
-    "per_device_train_batch_size": 4,  # Will be tuned by hyperparameter search
-    "gradient_accumulation_steps": 2,  # Effective batch size = 4 * 2 = 8
+    "num_train_epochs": 2,  # More epochs to allow learning, with early stopping
+    "per_device_train_batch_size": 4,  # Batch size per GPU/CPU
+    "gradient_accumulation_steps": 4,  # Number of steps to accumulate gradients before updating weights
+    # Memory optimization settings
+    "fp16": True,  # Enable mixed precision training (faster, less memory)
+    "gradient_checkpointing": True,  # Trade speed for memory efficiency
+    "group_by_length": True,  # Group similar length sequences together to minimize padding
+    "dataloader_pin_memory": False,  # Set to False if using CPU or if you get memory issues
+    "dataloader_num_workers": 0,  # Set to 0 if you have memory issues with multiple workers
     # Optimizer settings
     "optim": "adamw_torch",
     "learning_rate": 2e-5,  # Will be tuned by hyperparameter search
@@ -52,7 +58,7 @@ TRAINING_ARGS = {
     "warmup_ratio": 0.03,  # Will be tuned by hyperparameter search
     # Regularization to prevent output collapse
     "label_smoothing_factor": 0.05,  # Reduced - was preventing confident predictions
-    # Evaluation and saving (once per epoch since we only have 1 epoch)
+    # Evaluation and saving
     "evaluation_strategy": "epoch",  # Evaluate at end of epoch
     "save_strategy": "epoch",  # Save at end of epoch
     "save_total_limit": 1,  # Keep only the best checkpoint
@@ -177,7 +183,7 @@ def load_model_and_tokenizer():
     return model, tokenizer
 
 
-def model_init(trial=None):
+def model_init(trial=None, use_cpu=False):
     """Initializes a fresh model for each hyperparameter search trial."""
     if trial is not None:
         # Create output directory for this trial
@@ -188,7 +194,10 @@ def model_init(trial=None):
         # Normal training mode
         output_dir = OUTPUT_DIR
 
-    base_model = AutoModelForCausalLM.from_pretrained(MODEL_ID, trust_remote_code=True)
+    device_map = "auto" if not use_cpu else "cpu"
+    base_model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID, trust_remote_code=True, device_map=device_map
+    )
     peft_config = LoraConfig(
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
@@ -382,7 +391,7 @@ def hyperparameter_space(trial):
         "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-4, log=True),
         "warmup_ratio": trial.suggest_float("warmup_ratio", 0.01, 0.1),
         "per_device_train_batch_size": trial.suggest_categorical(
-            "per_device_train_batch_size", [4, 8, 16]
+            "per_device_train_batch_size", [1, 2, 4]
         ),
         "weight_decay": trial.suggest_float("weight_decay", 0.001, 0.1, log=True),
     }
@@ -402,6 +411,11 @@ if __name__ == "__main__":
         default=15,
         help="Number of hyperparameter search trials (default: 15)",
     )
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU training even if GPU is available",
+    )
     args = parser.parse_args()
 
     train_path = TRAIN_DATA_PATH
@@ -412,10 +426,18 @@ if __name__ == "__main__":
     train_dataset = load_and_prepare_dataset(tokenizer, train_path)
     validation_dataset = load_and_prepare_dataset(tokenizer, val_path)
 
+    # Update training args based on CPU/GPU mode
+    training_args = TRAINING_ARGS.copy()
+    if args.cpu:
+        training_args["use_cpu"] = True
+        print("--- Using CPU for training ---")
+    else:
+        print("--- Using GPU for training (if available) ---")
+
     if args.hyper:
         # --- HYPERPARAMETER SEARCH MODE ---
         print("--- Starting Hyperparameter Search ---")
-        training_args_for_search = TrainingArguments(**TRAINING_ARGS)
+        training_args_for_search = TrainingArguments(**training_args)
 
         # Create compute_metrics function with tokenizer
         compute_metrics_fn = create_compute_metrics(tokenizer)
@@ -423,7 +445,9 @@ if __name__ == "__main__":
         # Initialize a special trainer for hyperparameter search
         # Note: peft_config is applied inside model_init, not passed here
         search_trainer = SFTTrainer(
-            model_init=model_init,  # The trainer will call this to get a fresh model for each trial
+            model_init=lambda: model_init(
+                use_cpu=args.cpu
+            ),  # Pass CPU flag to model_init
             train_dataset=train_dataset,
             eval_dataset=validation_dataset,
             dataset_text_field="text",
@@ -608,12 +632,12 @@ if __name__ == "__main__":
         # --- NORMAL TRAINING MODE ---
         print("--- Starting Normal Training (no hyperparameter search) ---")
         print("Tip: Use --hyper flag to enable hyperparameter search")
-        final_training_args = TrainingArguments(**TRAINING_ARGS)
+        final_training_args = TrainingArguments(**training_args)
         print(f"Learning Rate: {final_training_args.learning_rate}")
         print(f"Epochs: {final_training_args.num_train_epochs}")
 
         # Load a fresh model for final training
-        final_model = model_init(None)
+        final_model = model_init(use_cpu=args.cpu)
 
         # Create compute_metrics function with tokenizer in closure
         compute_metrics_fn = create_compute_metrics(tokenizer)
