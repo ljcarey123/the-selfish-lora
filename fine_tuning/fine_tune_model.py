@@ -191,22 +191,33 @@ def model_init(trial=None, use_cpu=False):
         # Normal training mode
         output_dir = OUTPUT_DIR
 
+    # Set up device map and quantization config
+    device_map = "cpu" if use_cpu else "auto"
+    
     if use_cpu:
-        base_model = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID, trust_remote_code=True, device_map="cpu"
-        )
-    else:
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",  # "nf4" is a popular and effective quant type
-            bnb_4bit_compute_dtype=torch.bfloat16,  # Compute type for speed (bfloat16 for Ampere GPUs)
-            bnb_4bit_use_double_quant=True,  # Optional: nested quantization for slightly more memory saving
-        )
+        # For CPU, use full precision
         base_model = AutoModelForCausalLM.from_pretrained(
             MODEL_ID,
             trust_remote_code=True,
-            device_map="auto",
+            device_map=device_map,
+            torch_dtype=torch.float32
+        )
+    else:
+        # For GPU, use 4-bit quantization
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+            bnb_4bit_use_double_quant=True,
+        )
+        
+        # Load model with device_map='auto' and no additional device mapping
+        base_model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID,
+            trust_remote_code=True,
+            device_map=device_map,
             quantization_config=bnb_config,
+            torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
         )
 
     peft_config = LoraConfig(
