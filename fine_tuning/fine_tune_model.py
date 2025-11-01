@@ -10,6 +10,8 @@ from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 from datasets import Dataset
 import optuna
 import time
+import torch
+from transformers import BitsAndBytesConfig
 
 # --- CONFIGURATION ---
 load_dotenv()
@@ -47,10 +49,6 @@ TRAINING_ARGS = {
     "gradient_accumulation_steps": 4,  # Number of steps to accumulate gradients before updating weights
     # Memory optimization settings
     "fp16": True,  # Enable mixed precision training (faster, less memory)
-    "gradient_checkpointing": True,  # Trade speed for memory efficiency
-    "group_by_length": True,  # Group similar length sequences together to minimize padding
-    "dataloader_pin_memory": False,  # Set to False if using CPU or if you get memory issues
-    "dataloader_num_workers": 0,  # Set to 0 if you have memory issues with multiple workers
     # Optimizer settings
     "optim": "adamw_torch",
     "learning_rate": 2e-5,  # Will be tuned by hyperparameter search
@@ -173,14 +171,13 @@ def load_and_prepare_dataset(tokenizer, path):
     return dataset
 
 
-def load_model_and_tokenizer():
-    print(f"Loading base model: {MODEL_ID}")
+def load_tokenizer():
+    print(f"Loading tokenizer: {MODEL_ID}")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
-    model = AutoModelForCausalLM.from_pretrained(MODEL_ID, trust_remote_code=True)
-    print("Base model and tokenizer loaded.")
-    return model, tokenizer
+    print("Tokenizer loaded.")
+    return tokenizer
 
 
 def model_init(trial=None, use_cpu=False):
@@ -194,10 +191,24 @@ def model_init(trial=None, use_cpu=False):
         # Normal training mode
         output_dir = OUTPUT_DIR
 
-    device_map = "auto" if not use_cpu else "cpu"
-    base_model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID, trust_remote_code=True, device_map=device_map
-    )
+    if use_cpu:
+        base_model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID, trust_remote_code=True, device_map="cpu"
+        )
+    else:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",  # "nf4" is a popular and effective quant type
+            bnb_4bit_compute_dtype=torch.bfloat16,  # Compute type for speed (bfloat16 for Ampere GPUs)
+            bnb_4bit_use_double_quant=True,  # Optional: nested quantization for slightly more memory saving
+        )
+        base_model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID,
+            trust_remote_code=True,
+            device_map="auto",
+            quantization_config=bnb_config,
+        )
+
     peft_config = LoraConfig(
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
@@ -422,7 +433,7 @@ if __name__ == "__main__":
     val_path = VALIDATION_DATA_PATH
 
     # Load tokenizer and datasets
-    _, tokenizer = load_model_and_tokenizer()
+    tokenizer = load_tokenizer()
     train_dataset = load_and_prepare_dataset(tokenizer, train_path)
     validation_dataset = load_and_prepare_dataset(tokenizer, val_path)
 
