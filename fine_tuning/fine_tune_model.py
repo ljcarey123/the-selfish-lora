@@ -215,9 +215,7 @@ def model_init(trial=None, use_cpu=False):
             MODEL_ID,
             trust_remote_code=True,
             quantization_config=bnb_config,
-            torch_dtype=(
-                torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-            ),
+            device_map="auto",
         )
 
     peft_config = LoraConfig(
