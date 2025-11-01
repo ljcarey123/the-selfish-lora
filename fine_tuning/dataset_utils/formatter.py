@@ -1,4 +1,5 @@
 from typing import List, Optional
+import json
 
 from config_loader import GRID_SYMBOLS, AGENT_POS
 from .decision_rules import get_energy_level

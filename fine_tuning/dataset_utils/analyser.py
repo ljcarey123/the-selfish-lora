@@ -108,13 +108,14 @@ def analyse_dataset(examples, debug_info):
     print("\n" + "=" * 50 + "\n")
 
 
-def save_dataset_split(dataset, filename):
-    """Save a dataset split to a file in the specified format.
-
+def save_dataset_split(examples: list, file_path: str):
+    """Save a dataset split to a file in JSONL format.
+    
     Args:
-        dataset: List of examples, each example is a list of messages
-        filename: Output file path
+        examples: List of examples to save
+        file_path: Path to save the file
     """
-    # The dataset is already in the format we want
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(dataset, f, indent=2)
+    with open(file_path, "w", encoding="utf-8") as f:
+        for example in examples:
+            # Write each example as a separate JSON object on its own line
+            f.write(json.dumps(example) + "\n")

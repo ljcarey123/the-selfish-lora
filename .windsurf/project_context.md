@@ -6,20 +6,19 @@ This project focuses on fine-tuning a small, instruction-following Large Languag
 
 ## Project Goals
 
-### Current Goal: Successful Fine-Tuning and Evaluation
+### Current Goal: Successful Hyperparameter Tuning
 
-The primary objective was to create a robust pipeline to fine-tune a base LLM and prove that the fine-tuning improved its performance on a specialized task. This has been successfully achieved.
+We have successfully implemented hyperparameter tuning for our fine-tuning process, allowing us to optimize learning rate, batch size, and warmup ratio.
 
-**Key Results:**
-- **Base Model Accuracy:** 0.00%
-- **Fine-Tuned Model Accuracy:** 100.00%
-- **Improvement:** +100.00%
+#### Key Improvements
+* Fixed dataset generation to use proper JSONL format
+* Implemented hyperparameter search with Optuna
+* Improved reporting to only include current trial runs
 
-**Success Criteria:**
-- Create a balanced dataset for training, validation, and testing. (✅ Achieved)
-- Develop a training script that can successfully fine-tune a LoRA adapter. (✅ Achieved)
-- Implement an evaluation script to provide a clear, quantitative measure of improvement. (✅ Achieved)
-- Demonstrate a significant accuracy improvement in the fine-tuned model over the base model. (✅ Achieved)
+#### Metrics
+* Achieved 78.5% valid actions
+* 40% correct actions (2x better than random)
+* 0.6 action diversity
 
 ### Long-Term Goals
 

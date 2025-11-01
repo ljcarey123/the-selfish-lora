@@ -13,8 +13,11 @@ import math
 
 # --- CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-TEST_DATA_PATH = os.path.join(SCRIPT_DIR, "data", "test_data.json")
-BASE_MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
+MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
+TEST_DATA_PATH = os.path.join(SCRIPT_DIR, "data", "test.jsonl")
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "output")
+BASE_MODEL_PATH = MODEL_ID
+LORA_ADAPTER_PATH = os.path.join(OUTPUT_DIR, "best_model")
 
 
 class StopOnNewlineOrSpace(StoppingCriteria):
@@ -188,20 +191,19 @@ def run_evaluation(model, tokenizer, test_data, model_name):
 
 
 if __name__ == "__main__":
-    base_adapter_path = os.path.join(SCRIPT_DIR, "output")
     test_data = None
     with open(TEST_DATA_PATH, "r") as f:
-        test_data = json.load(f)
+        test_data = [json.loads(line) for line in f.readlines()]
 
     # --- 1. Evaluate Base Model ---
     print("\n" + "=" * 70)
     print("EVALUATING BASE MODEL")
     print("=" * 70)
     base_model = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL_ID, trust_remote_code=True
+        BASE_MODEL_PATH, trust_remote_code=True
     )
     base_tokenizer = AutoTokenizer.from_pretrained(
-        BASE_MODEL_ID, trust_remote_code=True
+        BASE_MODEL_PATH, trust_remote_code=True
     )
     base_tokenizer.pad_token = base_tokenizer.eos_token
     (
@@ -217,80 +219,27 @@ if __name__ == "__main__":
     del base_tokenizer
     torch.cuda.empty_cache()
 
-    # --- 2. Evaluate All Fine-Tuned Runs ---
+    # --- 2. Evaluate Best LoRA Adapter ---
     print("\n" + "=" * 70)
-    print("EVALUATING FINE-TUNED RUNS")
+    print("EVALUATING BEST LoRA ADAPTER")
     print("=" * 70)
 
-    # Find all run-* directories
-    run_dirs = []
-    if os.path.exists(base_adapter_path):
-        for item in sorted(os.listdir(base_adapter_path)):
-            item_path = os.path.join(base_adapter_path, item)
-            if os.path.isdir(item_path) and item.startswith("run-"):
-                # Find checkpoint subdirectories (save_total_limit=1 means only one exists)
-                checkpoints = []
-                for subitem in os.listdir(item_path):
-                    subitem_path = os.path.join(item_path, subitem)
-                    if os.path.isdir(subitem_path) and subitem.startswith(
-                        "checkpoint-"
-                    ):
-                        # Extract checkpoint number
-                        try:
-                            checkpoint_num = int(subitem.split("-")[1])
-                            checkpoints.append((checkpoint_num, subitem_path))
-                        except (IndexError, ValueError):
-                            pass
+    tuned_model = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL_PATH, trust_remote_code=True
+    )
+    tuned_model = PeftModel.from_pretrained(tuned_model, LORA_ADAPTER_PATH)
+    tuned_tokenizer = AutoTokenizer.from_pretrained(
+        BASE_MODEL_PATH, trust_remote_code=True
+    )
+    tuned_tokenizer.pad_token = tuned_tokenizer.eos_token
 
-                # Use the checkpoint (should only be one due to save_total_limit=1)
-                if checkpoints:
-                    checkpoints.sort(key=lambda x: x[0])
-                    final_checkpoint_path = checkpoints[-1][1]
-                    run_dirs.append((item, final_checkpoint_path))
-                else:
-                    # No checkpoints, use the run directory directly
-                    run_dirs.append((item, item_path))
+    accuracy, valid_rate, dist, results, diversity, balance, evolution = (
+        run_evaluation(tuned_model, tuned_tokenizer, test_data, "Best LoRA Adapter")
+    )
 
-    if not run_dirs:
-        print(f"No run-* directories found in {base_adapter_path}")
-        print("Looking for single adapter...")
-        run_dirs = [("final_champion_model", base_adapter_path)]
-
-    run_results = []
-    for run_name, adapter_path in run_dirs:
-        print(f"\n{'='*70}")
-        print(f"Evaluating: {run_name}")
-        print("=" * 70)
-
-        tuned_model = AutoModelForCausalLM.from_pretrained(
-            BASE_MODEL_ID, trust_remote_code=True
-        )
-        tuned_model = PeftModel.from_pretrained(tuned_model, adapter_path)
-        tuned_tokenizer = AutoTokenizer.from_pretrained(
-            BASE_MODEL_ID, trust_remote_code=True
-        )
-        tuned_tokenizer.pad_token = tuned_tokenizer.eos_token
-
-        accuracy, valid_rate, dist, results, diversity, balance, evolution = (
-            run_evaluation(tuned_model, tuned_tokenizer, test_data, run_name)
-        )
-
-        run_results.append(
-            {
-                "name": run_name,
-                "accuracy": accuracy,
-                "valid_rate": valid_rate,
-                "distribution": dist,
-                "results": results,
-                "diversity": diversity,
-                "balance": balance,
-                "evolution_score": evolution,
-            }
-        )
-
-        del tuned_model
-        del tuned_tokenizer
-        torch.cuda.empty_cache()
+    del tuned_model
+    del tuned_tokenizer
+    torch.cuda.empty_cache()
 
     # --- 3. Final Summary ---
     print(f"\n{'='*70}")
@@ -302,36 +251,17 @@ if __name__ == "__main__":
     print(f"  Valid Rate:       {base_valid_rate:.2f}%")
     print(f"  Evolution Score:  {base_evolution:.1f}%")
 
-    print(f"\nFine-Tuned Runs:")
-    best_run = None
-    best_evolution_score = -1
-
-    for result in run_results:
-        print(f"\n  {result['name']}:")
-        print(f"    Accuracy:         {result['accuracy']:.2f}%")
-        print(f"    Valid Rate:       {result['valid_rate']:.2f}%")
-        print(f"    Diversity:        {result['diversity']*100:.1f}%")
-        print(f"    Balance:          {result['balance']*100:.1f}%")
-        print(f"    Evolution Score:  {result['evolution_score']:.1f}%")
-
-        if result["evolution_score"] > best_evolution_score:
-            best_evolution_score = result["evolution_score"]
-            best_run = result
-
-    if best_run:
-        print(f"\n{'='*70}")
-        print(f"BEST RUN FOR EVOLUTION: {best_run['name']}")
-        print("=" * 70)
-        print(f"  Accuracy:         {best_run['accuracy']:.2f}%")
-        print(f"  Valid Rate:       {best_run['valid_rate']:.2f}%")
-        print(f"  Diversity:        {best_run['diversity']*100:.1f}%")
-        print(f"  Balance:          {best_run['balance']*100:.1f}%")
-        print(f"  Evolution Score:  {best_run['evolution_score']:.1f}%")
+    print(f"\nBest LoRA Adapter:")
+    print(f"  Accuracy:         {accuracy:.2f}%")
+    print(f"  Valid Rate:       {valid_rate:.2f}%")
+    print(f"  Diversity:        {diversity*100:.1f}%")
+    print(f"  Balance:          {balance*100:.1f}%")
+    print(f"  Evolution Score:  {evolution:.1f}%")
 
     print("=" * 70)
 
     # --- 4. Save Evaluation Report ---
-    eval_report_path = os.path.join(base_adapter_path, "EVALUATION_REPORT_FINAL.txt")
+    eval_report_path = os.path.join(OUTPUT_DIR, "EVALUATION_REPORT_FINAL.txt")
     with open(eval_report_path, "w", encoding="utf-8") as f:
         f.write("=" * 70 + "\n")
         f.write("FINAL EVALUATION REPORT - TEST SET PERFORMANCE\n")
@@ -345,33 +275,13 @@ if __name__ == "__main__":
         f.write(f"  Balance:          {base_balance*100:.1f}%\n")
         f.write(f"  Evolution Score:  {base_evolution:.1f}%\n\n")
 
-        f.write("Fine-Tuned Runs Performance (sorted by Evolution Score):\n")
-        f.write("=" * 70 + "\n")
-        f.write(f"{'Run':<12} {'Evol':<8} {'Valid':<8} {'Div':<8} {'Bal':<8} {'Acc':<8}\n")
-        f.write(f"{'':12} {'Score':<8} {'%':<8} {'%':<8} {'%':<8} {'%':<8}\n")
+        f.write("Best LoRA Adapter Performance:\n")
         f.write("-" * 70 + "\n")
-
-        # Sort by evolution score (best first)
-        sorted_results = sorted(run_results, key=lambda x: x["evolution_score"], reverse=True)
-
-        for result in sorted_results:
-            f.write(f"{result['name']:<12} ")
-            f.write(f"{result['evolution_score']:<8.1f} ")
-            f.write(f"{result['valid_rate']:<8.1f} ")
-            f.write(f"{result['diversity']*100:<8.1f} ")
-            f.write(f"{result['balance']*100:<8.1f} ")
-            f.write(f"{result['accuracy']:<8.1f}\n")
-
-        f.write("\n" + "=" * 70 + "\n")
-
-        if best_run:
-            f.write(f"\nBEST RUN FOR EVOLUTION: {best_run['name']}\n")
-            f.write("-" * 70 + "\n")
-            f.write(f"  Evolution Score:  {best_run['evolution_score']:.1f}%\n")
-            f.write(f"  Valid Rate:       {best_run['valid_rate']:.2f}%\n")
-            f.write(f"  Diversity:        {best_run['diversity']*100:.1f}%\n")
-            f.write(f"  Balance:          {best_run['balance']*100:.1f}%\n")
-            f.write(f"  Accuracy:         {best_run['accuracy']:.2f}%\n\n")
+        f.write(f"  Accuracy:         {accuracy:.2f}%\n")
+        f.write(f"  Valid Rate:       {valid_rate:.2f}%\n")
+        f.write(f"  Diversity:        {diversity*100:.1f}%\n")
+        f.write(f"  Balance:          {balance*100:.1f}%\n")
+        f.write(f"  Evolution Score:  {evolution:.1f}%\n\n")
 
         f.write("\nAction Distribution Comparison:\n")
         f.write("=" * 70 + "\n")
@@ -383,13 +293,12 @@ if __name__ == "__main__":
             pct = (count / len(test_data)) * 100
             f.write(f"  {action}: {count} ({pct:.1f}%)\n")
 
-        # Best run distribution
-        if best_run:
-            f.write(f"\n{best_run['name']} Predicted Actions:\n")
-            for action in sorted(best_run["distribution"].keys()):
-                count = best_run["distribution"][action]
-                pct = (count / len(test_data)) * 100
-                f.write(f"  {action}: {count} ({pct:.1f}%)\n")
+        # Best LoRA adapter distribution
+        f.write(f"\nBest LoRA Adapter Predicted Actions:\n")
+        for action in sorted(dist.keys()):
+            count = dist[action]
+            pct = (count / len(test_data)) * 100
+            f.write(f"  {action}: {count} ({pct:.1f}%)\n")
 
         f.write("\n" + "=" * 70 + "\n")
         f.write("\nMetric Definitions:\n")
@@ -404,16 +313,15 @@ if __name__ == "__main__":
         f.write("\nFor training metrics, see TRAINING_REPORT_FINAL.txt\n")
 
         # Add detailed predictions for best run
-        if best_run and "results" in best_run:
-            f.write("\n" + "=" * 70 + "\n")
-            f.write(f"\nDETAILED PREDICTIONS - {best_run['name']}\n")
-            f.write("=" * 70 + "\n\n")
+        f.write("\n" + "=" * 70 + "\n")
+        f.write(f"\nDETAILED PREDICTIONS - Best LoRA Adapter\n")
+        f.write("=" * 70 + "\n\n")
 
-            for i, res in enumerate(best_run["results"], 1):
-                status = "✅" if res["predicted"] == res["true"] else "❌"
-                f.write(f"{i:2d}. {status} Raw Output: '{res['raw_output']}'\n")
-                f.write(
-                    f"       → Parsed as: '{res['predicted']}'  |  Expected: '{res['true']}'\n\n"
-                )
+        for i, res in enumerate(results, 1):
+            status = "✅" if res["predicted"] == res["true"] else "❌"
+            f.write(f"{i:2d}. {status} Raw Output: '{res['raw_output']}'\n")
+            f.write(
+                f"       → Parsed as: '{res['predicted']}'  |  Expected: '{res['true']}'\n\n"
+            )
 
     print(f"\nEvaluation report saved to: {eval_report_path}")

@@ -8,7 +8,7 @@ The architecture is modular, separating the simulation logic, agent behavior, an
 
 ## 2. Core Components
 
-The system is composed of five primary components:
+The system is composed of seven primary components:
 
 ### `Simulation`
 
@@ -49,6 +49,25 @@ The system is composed of five primary components:
 
 - **File:** `src/visualization/visualizer.py`
 - **Responsibility:** Reads the output data and generates all plots and animations.
+
+### Dataset Generation
+
+- **File:** `fine_tuning/create_dataset.py`
+- **Responsibility:** Creates a synthetic dataset for training the agent model.
+- **Key Features:**
+  - Generates balanced examples for each action
+  - Uses JSONL format (one JSON object per line) for compatibility
+  - Implements stratified splitting for train/validation/test sets
+
+### Fine-Tuning Pipeline
+
+- **File:** `fine_tuning/fine_tune_model.py`
+- **Responsibility:** Trains the agent model using the generated dataset.
+- **Key Features:**
+  - Supports hyperparameter tuning with Optuna
+  - Tracks action-level metrics (valid action rate, correct action rate)
+  - Generates comprehensive reports for each run
+  - Produces training/validation loss curves
 
 ## 3. Configuration Management
 
@@ -94,4 +113,3 @@ The simulation proceeds in a sequence orchestrated by `main.py`:
      v         |           v
 [ Environment ]<----[ Agent ]----->[ LoraBrain ]
 (Grid & Resources) (State & History)   (Weights)
-```
