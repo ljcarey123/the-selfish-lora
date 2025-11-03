@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from dotenv import load_dotenv
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 from datasets import Dataset
 import optuna
@@ -212,6 +212,10 @@ def model_init(
             trust_remote_code=True,
             quantization_config=bnb_config,
             device_map="auto",
+        )
+
+        base_model = prepare_model_for_kbit_training(
+            base_model, use_gradient_checkpointing=True
         )
 
     peft_config = LoraConfig(
@@ -454,6 +458,7 @@ if __name__ == "__main__":
         # Memory optimization
         fp16=not args.cpu,  # Enable mixed precision only for GPU
         use_cpu=args.cpu,
+        gradient_checkpointing=True,
         # Optimizer settings
         optim="adamw_torch",
         learning_rate=2e-5,
