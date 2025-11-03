@@ -11,7 +11,9 @@ from datasets import Dataset
 import optuna
 import time
 import torch
-from transformers import BitsAndBytesConfig
+from transformers import BitsAndBytesConfig, PreTrainedModel
+from typing import Optional
+from optuna.trial import Trial
 
 # --- CONFIGURATION ---
 load_dotenv()
@@ -41,31 +43,6 @@ LORA_TARGET_MODULES = [
     "down_proj",
 ]
 
-TRAINING_ARGS = {
-    # Core training settings
-    "output_dir": OUTPUT_DIR,
-    "num_train_epochs": 2,  # More epochs to allow learning, with early stopping
-    "per_device_train_batch_size": 4,  # Batch size per GPU/CPU
-    "gradient_accumulation_steps": 4,  # Number of steps to accumulate gradients before updating weights
-    # Memory optimization settings
-    "fp16": True,  # Enable mixed precision training (faster, less memory)
-    # Optimizer settings
-    "optim": "adamw_torch",
-    "learning_rate": 2e-5,  # Will be tuned by hyperparameter search
-    "weight_decay": 0.01,  # L2 regularization prevents overfitting
-    "warmup_ratio": 0.03,  # Will be tuned by hyperparameter search
-    # Regularization to prevent output collapse
-    "label_smoothing_factor": 0.05,  # Reduced - was preventing confident predictions
-    # Evaluation and saving
-    "evaluation_strategy": "epoch",  # Evaluate at end of epoch
-    "save_strategy": "epoch",  # Save at end of epoch
-    "save_total_limit": 1,  # Keep only the best checkpoint
-    "load_best_model_at_end": True,  # Load best checkpoint (only one anyway)
-    "metric_for_best_model": "eval_loss",
-    # Logging and misc
-    "logging_steps": 10,  # Log every 10 steps
-    "report_to": "none",  # Don't send to wandb/tensorboard
-}
 
 # Early stopping configuration
 EARLY_STOPPING_PATIENCE = 2  # Stop if no improvement for 2 epochs
@@ -180,16 +157,35 @@ def load_tokenizer():
     return tokenizer
 
 
-def model_init(trial=None, use_cpu=False):
-    """Initializes a fresh model for each hyperparameter search trial."""
+def model_init(
+    trial: Optional[Trial] = None, use_cpu: bool = False
+) -> "PreTrainedModel":
+    """Initializes a fresh model for each hyperparameter search trial.
+
+    Args:
+        trial: Optuna trial object for hyperparameter optimization. None for normal training.
+        use_cpu: If True, forces CPU training even if GPU is available.
+
+    Returns:
+        PreTrainedModel: A model configured with the specified parameters.
+    """
     if trial is not None:
         # Create output directory for this trial
         output_dir = os.path.join(OUTPUT_DIR, f"run-{trial.number}")
         os.makedirs(output_dir, exist_ok=True)
         trial.set_user_attr("output_dir", output_dir)
+
+        # Get hyperparameters from trial
+        lora_r = trial.params["lora_r"]
+        lora_dropout = trial.params["lora_dropout"]
     else:
-        # Normal training mode
+        # Normal training mode - use default values
         output_dir = OUTPUT_DIR
+        lora_r = LORA_R
+        lora_dropout = LORA_DROPOUT
+
+    # Set lora_alpha based on r (common practice to set alpha = 2 * r)
+    lora_alpha = lora_r * 2
 
     if use_cpu:
         # For CPU, use full precision
@@ -219,10 +215,11 @@ def model_init(trial=None, use_cpu=False):
         )
 
     peft_config = LoraConfig(
-        r=LORA_R,
-        lora_alpha=LORA_ALPHA,
-        lora_dropout=LORA_DROPOUT,
+        r=lora_r,
+        lora_alpha=lora_alpha,
+        lora_dropout=lora_dropout,
         target_modules=LORA_TARGET_MODULES,
+        bias="none",
         task_type="CAUSAL_LM",
     )
     model = get_peft_model(base_model, peft_config)
@@ -410,10 +407,11 @@ def hyperparameter_space(trial):
     return {
         "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-4, log=True),
         "warmup_ratio": trial.suggest_float("warmup_ratio", 0.01, 0.1),
-        "per_device_train_batch_size": trial.suggest_categorical(
-            "per_device_train_batch_size", [1, 2, 4]
+        "gradient_accumulation_steps": trial.suggest_categorical(
+            "gradient_accumulation_steps", [4, 8, 16, 32]
         ),
-        "weight_decay": trial.suggest_float("weight_decay", 0.001, 0.1, log=True),
+        "lora_r": trial.suggest_categorical("lora_r", [8, 16, 32]),
+        "lora_dropout": trial.suggest_categorical("lora_dropout", [0.05, 0.1]),
     }
 
 
@@ -446,18 +444,39 @@ if __name__ == "__main__":
     train_dataset = load_and_prepare_dataset(tokenizer, train_path)
     validation_dataset = load_and_prepare_dataset(tokenizer, val_path)
 
-    # Update training args based on CPU/GPU mode
-    training_args = TRAINING_ARGS.copy()
-    if args.cpu:
-        training_args["use_cpu"] = True
-        print("--- Using CPU for training ---")
-    else:
-        print("--- Using GPU for training (if available) ---")
+    # Define training arguments with proper typing
+    training_args = TrainingArguments(
+        # Core training settings
+        output_dir=OUTPUT_DIR,
+        num_train_epochs=2.0,  # float to match expected type
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=4,
+        # Memory optimization
+        fp16=not args.cpu,  # Enable mixed precision only for GPU
+        use_cpu=args.cpu,
+        # Optimizer settings
+        optim="adamw_torch",
+        learning_rate=2e-5,
+        weight_decay=0.01,
+        warmup_ratio=0.03,
+        # Regularization
+        label_smoothing_factor=0.05,
+        # Evaluation and saving
+        evaluation_strategy="epoch",
+        save_strategy="epoch",
+        save_total_limit=1,
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        # Logging
+        logging_steps=10,
+        report_to="none",
+    )
 
     if args.hyper:
         # --- HYPERPARAMETER SEARCH MODE ---
         print("--- Starting Hyperparameter Search ---")
-        training_args_for_search = TrainingArguments(**training_args)
+        # Use the same training arguments for search, but update output dir per trial
+        training_args_for_search = training_args
 
         # Create compute_metrics function with tokenizer
         compute_metrics_fn = create_compute_metrics(tokenizer)
@@ -471,7 +490,7 @@ if __name__ == "__main__":
             train_dataset=train_dataset,
             eval_dataset=validation_dataset,
             dataset_text_field="text",
-            max_seq_length=512,
+            max_seq_length=256,
             tokenizer=tokenizer,
             args=training_args_for_search,
             packing=False,
