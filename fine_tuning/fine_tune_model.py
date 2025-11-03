@@ -157,66 +157,53 @@ def load_tokenizer():
     return tokenizer
 
 
-def model_init(
-    trial: Optional[Trial] = None, use_cpu: bool = False
-) -> "PreTrainedModel":
+def model_init(trial: Optional[Trial] = None) -> "PreTrainedModel":
     """Initializes a fresh model for each hyperparameter search trial.
 
     Args:
         trial: Optuna trial object for hyperparameter optimization. None for normal training.
-        use_cpu: If True, forces CPU training even if GPU is available.
 
     Returns:
         PreTrainedModel: A model configured with the specified parameters.
     """
     if trial is not None:
-        # Create output directory for this trial
-        output_dir = os.path.join(OUTPUT_DIR, f"run-{trial.number}")
-        os.makedirs(output_dir, exist_ok=True)
-        trial.set_user_attr("output_dir", output_dir)
-
-        # Get hyperparameters from trial
+        # --- HPO Mode ---
+        # Get the output_dir that hp_space() already set
+        output_dir = trial.user_attrs["output_dir"]
         lora_r = trial.params["lora_r"]
         lora_dropout = trial.params["lora_dropout"]
     else:
-        # Normal training mode - use default values
+        # --- Normal Training Mode ---
         output_dir = OUTPUT_DIR
+        # Manually create the main output dir if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
         lora_r = LORA_R
         lora_dropout = LORA_DROPOUT
 
     # Set lora_alpha based on r (common practice to set alpha = 2 * r)
     lora_alpha = lora_r * 2
 
-    if use_cpu:
-        # For CPU, use full precision
-        base_model = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID,
-            trust_remote_code=True,
-            device_map="cpu",
-            torch_dtype=torch.float32,
-        )
-    else:
-        # For GPU, use 4-bit quantization
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=(
-                torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-            ),
-            bnb_4bit_use_double_quant=True,
-        )
+    # For GPU, use 4-bit quantization
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=(
+            torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        ),
+        bnb_4bit_use_double_quant=True,
+    )
 
-        # Load model with device_map='auto' and no additional device mapping
-        base_model = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID,
-            trust_remote_code=True,
-            quantization_config=bnb_config,
-            device_map="auto",
-        )
+    # Load model with device_map='auto' and no additional device mapping
+    base_model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        trust_remote_code=True,
+        quantization_config=bnb_config,
+        device_map="auto",
+    )
 
-        base_model = prepare_model_for_kbit_training(
-            base_model, use_gradient_checkpointing=True
-        )
+    base_model = prepare_model_for_kbit_training(
+        base_model, use_gradient_checkpointing=True
+    )
 
     peft_config = LoraConfig(
         r=lora_r,
@@ -433,11 +420,7 @@ if __name__ == "__main__":
         default=15,
         help="Number of hyperparameter search trials (default: 15)",
     )
-    parser.add_argument(
-        "--cpu",
-        action="store_true",
-        help="Force CPU training even if GPU is available",
-    )
+
     args = parser.parse_args()
 
     train_path = TRAIN_DATA_PATH
@@ -456,11 +439,10 @@ if __name__ == "__main__":
         per_device_train_batch_size=1,
         gradient_accumulation_steps=4,
         # Memory optimization
-        fp16=not args.cpu,  # Enable mixed precision only for GPU
-        use_cpu=args.cpu,
+        fp16=True,  # Enable mixed precision for GPU
         gradient_checkpointing=True,
         # Optimizer settings
-        optim="adamw_torch",
+        optim="paged_adamw_8bit",
         learning_rate=2e-5,
         weight_decay=0.01,
         warmup_ratio=0.03,
@@ -491,7 +473,7 @@ if __name__ == "__main__":
         # Initialize a special trainer for hyperparameter search
         # Note: peft_config is applied inside model_init, not passed here
         search_trainer = SFTTrainer(
-            model_init=lambda trial: model_init(trial=trial, use_cpu=args.cpu),
+            model_init=model_init,
             train_dataset=train_dataset,
             eval_dataset=validation_dataset,
             dataset_text_field="text",
@@ -527,13 +509,14 @@ if __name__ == "__main__":
         print("--- Hyperparameter Search Complete ---")
         print(f"Best run found: {best_run}")
         print(f"\nBest Hyperparameters:")
-        print(f"  Learning Rate: {best_run.hyperparameters['learning_rate']}")
-        print(f"  Warmup Ratio: {best_run.hyperparameters['warmup_ratio']}")
+        print(f"  Learning Rate: {best_run.hyperparameters['learning_rate']:.2e}")
+        print(f"  Warmup Ratio: {best_run.hyperparameters['warmup_ratio']:.3f}")
         print(
-            f"  Batch Size: {best_run.hyperparameters['per_device_train_batch_size']}"
+            f"  Grad Accumulation: {best_run.hyperparameters['gradient_accumulation_steps']}"
         )
-        print(f"  Weight Decay: {best_run.hyperparameters['weight_decay']}")
-        print(f"  Objective (eval_loss): {best_run.objective}")
+        print(f"  LoRA Rank (r): {best_run.hyperparameters['lora_r']}")
+        print(f"  LoRA Dropout: {best_run.hyperparameters['lora_dropout']}")
+        print(f"  Objective (eval_loss): {best_run.objective:.4f}")
 
         # Generate plots and reports for each run in the current search
         print("\n--- Generating Reports for Current Runs ---")
@@ -580,15 +563,14 @@ if __name__ == "__main__":
             run_hyperparams = {
                 "run_name": run_name,
                 "checkpoint": final_checkpoint,
-                "lora_r": LORA_R,
-                "lora_alpha": LORA_ALPHA,
-                "lora_dropout": LORA_DROPOUT,
                 "learning_rate": run.params["learning_rate"],
                 "warmup_ratio": run.params["warmup_ratio"],
-                "per_device_train_batch_size": run.params[
-                    "per_device_train_batch_size"
+                "gradient_accumulation_steps": run.params[
+                    "gradient_accumulation_steps"
                 ],
-                "weight_decay": run.params["weight_decay"],
+                "lora_r": run.params["lora_r"],
+                "lora_dropout": run.params["lora_dropout"],
+                "lora_alpha": run.params["lora_r"] * 2,  # Calculate alpha from r
             }
             save_training_report(
                 state, checkpoint_path, hyperparameters=run_hyperparams
@@ -632,12 +614,14 @@ if __name__ == "__main__":
             f.write(
                 f"  Learning Rate: {best_run.hyperparameters['learning_rate']:.2e}\n"
             )
-            f.write(f"  Warmup Ratio: {best_run.hyperparameters['warmup_ratio']:.4f}\n")
+            f.write(f"  Warmup Ratio: {best_run.hyperparameters['warmup_ratio']:.3f}\n")
             f.write(
-                f"  Batch Size: {best_run.hyperparameters['per_device_train_batch_size']}\n"
+                f"  Grad Accumulation: {best_run.hyperparameters['gradient_accumulation_steps']}\n"
             )
+            f.write(f"  LoRA Rank (r): {best_run.hyperparameters['lora_r']}\n")
+            f.write(f"  LoRA Dropout: {best_run.hyperparameters['lora_dropout']:.2f}\n")
             f.write(
-                f"  Weight Decay: {best_run.hyperparameters['weight_decay']:.4f}\n\n"
+                f"  LoRA Alpha: {best_run.hyperparameters['lora_r'] * 2} (2 * r)\n\n"
             )
 
             f.write("All Runs Performance:\n")
@@ -676,12 +660,14 @@ if __name__ == "__main__":
         # --- NORMAL TRAINING MODE ---
         print("--- Starting Normal Training (no hyperparameter search) ---")
         print("Tip: Use --hyper flag to enable hyperparameter search")
-        final_training_args = TrainingArguments(**training_args)
+
+        # Use the existing TrainingArguments object
+        final_training_args = training_args
         print(f"Learning Rate: {final_training_args.learning_rate}")
         print(f"Epochs: {final_training_args.num_train_epochs}")
 
         # Load a fresh model for final training
-        final_model = model_init(use_cpu=args.cpu)
+        final_model = model_init(trial=None)  # Pass trial=None for normal training
 
         # Create compute_metrics function with tokenizer in closure
         compute_metrics_fn = create_compute_metrics(tokenizer)
