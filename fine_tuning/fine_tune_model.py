@@ -14,6 +14,8 @@ import torch
 from transformers import BitsAndBytesConfig, PreTrainedModel
 from typing import Optional
 from optuna.trial import Trial
+from transformers.trainer_callback import TrainerState
+
 
 # --- CONFIGURATION ---
 load_dotenv()
@@ -454,7 +456,6 @@ if __name__ == "__main__":
         save_total_limit=1,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
-        eval_on_cpu=True,
         per_device_eval_batch_size=1,
         # Logging
         logging_steps=10,
@@ -481,7 +482,8 @@ if __name__ == "__main__":
             tokenizer=tokenizer,
             args=training_args_for_search,
             packing=False,
-            compute_metrics=compute_metrics_fn,
+            # Temporarily disabled to reduce VRAM usage
+            # compute_metrics=compute_metrics_fn,
             data_collator=DataCollatorForCompletionOnlyLM(
                 response_template="assistant", tokenizer=tokenizer
             ),
@@ -551,9 +553,6 @@ if __name__ == "__main__":
             with open(state_file, "r") as f:
                 state_dict = json.load(f)
 
-            # Create a minimal TrainerState object
-            from transformers.trainer_callback import TrainerState
-
             state = TrainerState(**state_dict)
 
             # Generate plots
@@ -582,21 +581,23 @@ if __name__ == "__main__":
             eval_logs = [log for log in log_history if "eval_loss" in log]
             if eval_logs:
                 final_eval = eval_logs[-1]
-                all_run_metrics.append(
-                    {
-                        "run_name": run_name,
-                        "eval_loss": final_eval.get("eval_loss", float("inf")),
-                        "valid_action_rate": final_eval.get(
-                            "eval_valid_action_rate", 0.0
-                        ),
-                        "correct_action_rate": final_eval.get(
-                            "eval_correct_action_rate", 0.0
-                        ),
-                        "action_diversity": final_eval.get(
-                            "eval_action_diversity", 0.0
-                        ),
-                    }
-                )
+                run_metrics = {
+                    "run_name": run_name,
+                    "eval_loss": final_eval.get("eval_loss", float("inf")),
+                }
+
+                # Only add action metrics if they exist in the evaluation logs
+                action_metrics = {
+                    "valid_action_rate": "eval_valid_action_rate",
+                    "correct_action_rate": "eval_correct_action_rate",
+                    "action_diversity": "eval_action_diversity",
+                }
+
+                for metric_key, eval_key in action_metrics.items():
+                    if eval_key in final_eval:
+                        run_metrics[metric_key] = final_eval[eval_key]
+
+                all_run_metrics.append(run_metrics)
 
         # Generate comprehensive final report
         final_report_path = os.path.join(OUTPUT_DIR, "TRAINING_REPORT_FINAL.txt")
@@ -626,9 +627,24 @@ if __name__ == "__main__":
 
             f.write("All Runs Performance:\n")
             f.write("=" * 70 + "\n")
-            f.write(
-                f"{'Run':<10} {'Eval Loss':<12} {'Valid %':<10} {'Correct %':<12} {'Diversity':<10}\n"
+
+            # Check if we have action metrics available
+            has_action_metrics = all(
+                k in all_run_metrics[0]
+                for k in [
+                    "valid_action_rate",
+                    "correct_action_rate",
+                    "action_diversity",
+                ]
             )
+
+            if has_action_metrics:
+                f.write(
+                    f"{'Run':<10} {'Eval Loss':<12} {'Valid %':<10} {'Correct %':<12} {'Diversity':<10}\n"
+                )
+            else:
+                f.write(f"{'Run':<10} {'Eval Loss':<12} {'Status':<10}\n")
+
             f.write("-" * 70 + "\n")
 
             # Sort by eval_loss (best first)
@@ -637,9 +653,14 @@ if __name__ == "__main__":
             for metrics in all_run_metrics:
                 f.write(f"{metrics['run_name']:<10} ")
                 f.write(f"{metrics['eval_loss']:<12.4f} ")
-                f.write(f"{metrics['valid_action_rate']*100:<10.1f} ")
-                f.write(f"{metrics['correct_action_rate']*100:<12.1f} ")
-                f.write(f"{metrics['action_diversity']:<10.2f}\n")
+
+                if has_action_metrics:
+                    f.write(f"{metrics.get('valid_action_rate', 0)*100:<10.1f} ")
+                    f.write(f"{metrics.get('correct_action_rate', 0)*100:<12.1f} ")
+                    f.write(f"{metrics.get('action_diversity', 0):<10.2f}")
+                else:
+                    f.write(f"{'N/A':<10}")
+                f.write("\n")
 
             f.write("\n" + "=" * 70 + "\n")
             f.write("\nNotes:\n")
