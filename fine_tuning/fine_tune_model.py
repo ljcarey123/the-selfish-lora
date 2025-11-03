@@ -472,6 +472,8 @@ if __name__ == "__main__":
         save_total_limit=1,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
+        eval_on_cpu=True,
+        per_device_eval_batch_size=1,
         # Logging
         logging_steps=10,
         report_to="none",
@@ -489,9 +491,7 @@ if __name__ == "__main__":
         # Initialize a special trainer for hyperparameter search
         # Note: peft_config is applied inside model_init, not passed here
         search_trainer = SFTTrainer(
-            model_init=lambda: model_init(
-                use_cpu=args.cpu
-            ),  # Pass CPU flag to model_init
+            model_init=lambda trial: model_init(trial=trial, use_cpu=args.cpu),
             train_dataset=train_dataset,
             eval_dataset=validation_dataset,
             dataset_text_field="text",
