@@ -158,37 +158,43 @@ class StopOnNewlineOrSpace(StoppingCriteria):
 
 
 def get_model_prediction(model, tokenizer, example):
+    # Prepare the input with chat template
     chat_template = tokenizer.apply_chat_template(
         example, tokenize=False, add_generation_prompt=True
     )
     inputs = tokenizer(chat_template, return_tensors="pt").to(model.device)
     start_length = inputs.input_ids.shape[1]
 
-    # Create stopping criteria
-    stopping_criteria = StoppingCriteriaList(
-        [StopOnNewlineOrSpace(tokenizer, start_length)]
-    )
+    # Create stopping criteria - more permissive to allow different action words
+    stopping_criteria = StoppingCriteriaList([
+        StopOnNewlineOrSpace(tokenizer, start_length)
+    ])
 
-    # Generate with constrained parameters for single-word action prediction
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=10,  # Allow some buffer
-        temperature=0.1,  # Low temperature for more deterministic output
-        do_sample=False,  # Greedy decoding for consistency
-        pad_token_id=tokenizer.eos_token_id,
-        eos_token_id=tokenizer.eos_token_id,
-        stopping_criteria=stopping_criteria,
-    )
+    # Generate with deterministic settings for evolutionary tasks
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=10,  # Just enough for action words
+            temperature=0.1,  # Low temperature for deterministic outputs
+            do_sample=False,  # Greedy decoding for consistency
+            num_return_sequences=1,
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+            stopping_criteria=stopping_criteria,
+        )
 
-    response_ids = outputs[0][inputs.input_ids.shape[1] :]
+    response_ids = outputs[0][inputs.input_ids.shape[1]:]
     raw_output = tokenizer.decode(response_ids, skip_special_tokens=True).strip()
 
-    # Extract only the first word (the action)
-    # This handles cases where model generates extra text
-    first_word = raw_output.split()[0] if raw_output.split() else raw_output
-    # Remove any punctuation or special characters
-    parsed_action = first_word.strip(".,!?;:").strip()
-
+    # Return the full generated text (up to 20 tokens)
+    # Remove any leading/trailing whitespace and newlines
+    parsed_action = raw_output.strip()
+    
+    # Truncate to first 20 tokens if needed
+    tokens = parsed_action.split()
+    if len(tokens) > 20:
+        parsed_action = ' '.join(tokens[:20])
+    
     return raw_output, parsed_action
 
 
@@ -202,7 +208,8 @@ def run_evaluation(model, tokenizer, test_data, model_name):
     # Track action distributions
     predicted_actions = {}
     true_actions = {}
-    valid_actions = ["North", "South", "East", "West", "Gather"]
+    # Standardized action names from config/prompts.json
+    valid_actions = ["move_north", "move_south", "move_east", "move_west", "gather", "stand_still"]
 
     for example in tqdm(test_data, desc=f"Evaluating {model_name}"):
         prompt_messages = example[:-1]

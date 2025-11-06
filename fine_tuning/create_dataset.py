@@ -95,11 +95,12 @@ def generate_dataset(num_examples: int = 1000):
             seen_examples.add(example_key)
 
             # Store minimal data in the actual dataset
+            # Use raw action names (e.g., 'move_north') instead of title-cased versions
             examples.append(
                 [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": action.replace("_", " ").title()},
+                    {"role": "assistant", "content": action},  # Use raw action name
                 ]
             )
 
