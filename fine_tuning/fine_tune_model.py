@@ -203,6 +203,7 @@ def model_init(trial: Optional[Trial] = None) -> "PreTrainedModel":
         device_map="auto",
     )
 
+    base_model.config.use_cache = False  # Fixes gradient checkpointing
     base_model = prepare_model_for_kbit_training(
         base_model, use_gradient_checkpointing=True
     )
@@ -712,25 +713,34 @@ if __name__ == "__main__":
         final_trainer.train()
 
         print("--- Training Finished ---")
-        final_trainer.save_model(OUTPUT_DIR)
-        print(f"Model saved to: {OUTPUT_DIR}")
+        
+        # Save the final model and adapter
+        output_dir = os.path.join(OUTPUT_DIR, "best_model")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Save the adapter
+        final_trainer.model.save_pretrained(output_dir)
+        # Save the tokenizer
+        tokenizer.save_pretrained(output_dir)
+        
+        print(f"Model and adapter saved to: {output_dir}")
 
         # Generate training plots
-        plot_training_results(final_trainer.state, OUTPUT_DIR)
+        plot_training_results(final_trainer.state, output_dir)
 
         # Generate detailed training report
         hyperparams_used = {
             "learning_rate": final_training_args.learning_rate,
             "num_train_epochs": final_training_args.num_train_epochs,
-            "warmup_ratio": final_training_args.warmup_ratio,
-            "per_device_train_batch_size": final_training_args.per_device_train_batch_size,
-            "gradient_accumulation_steps": final_training_args.gradient_accumulation_steps,
+            "warmup_ratio": final_trainer.args.warmup_ratio,
+            "per_device_train_batch_size": final_trainer.args.per_device_train_batch_size,
+            "gradient_accumulation_steps": final_trainer.args.gradient_accumulation_steps,
             "lora_r": LORA_R,
             "lora_alpha": LORA_ALPHA,
             "lora_dropout": LORA_DROPOUT,
         }
         save_training_report(
-            final_trainer.state, OUTPUT_DIR, hyperparameters=hyperparams_used
+            final_trainer.state, output_dir, hyperparameters=hyperparams_used
         )
 
         print("--- Fine-Tuning Process Complete ---")

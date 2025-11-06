@@ -1,7 +1,11 @@
 import os
 import json
 import torch
+import glob
+import argparse
 from tqdm import tqdm
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional, Union
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -17,7 +21,86 @@ MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
 TEST_DATA_PATH = os.path.join(SCRIPT_DIR, "data", "test.jsonl")
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "output")
 BASE_MODEL_PATH = MODEL_ID
-LORA_ADAPTER_PATH = os.path.join(OUTPUT_DIR, "best_model")
+
+# Default paths
+def find_best_checkpoint(run_dir: str) -> Optional[str]:
+    """Find the best checkpoint in a run directory based on validation loss."""
+    checkpoint_dirs = []
+    
+    # Look for checkpoint directories
+    for root, dirs, _ in os.walk(run_dir):
+        if 'checkpoint-' in root:
+            checkpoint_dirs.append(root)
+    
+    if not checkpoint_dirs:
+        # If no checkpoints, check if there's an adapter in the root
+        if "adapter_model.safetensors" in os.listdir(run_dir):
+            return run_dir
+        return None
+    
+    # Find checkpoint with best validation loss
+    best_checkpoint = None
+    best_loss = float('inf')
+    
+    for checkpoint_dir in checkpoint_dirs:
+        trainer_state_path = os.path.join(checkpoint_dir, "trainer_state.json")
+        if os.path.exists(trainer_state_path):
+            try:
+                with open(trainer_state_path, 'r') as f:
+                    state = json.load(f)
+                    if "best_model_checkpoint" in state:
+                        return state["best_model_checkpoint"]
+                    
+                    # Fallback: find checkpoint with lowest validation loss
+                    for log in state.get("log_history", []):
+                        if "eval_loss" in log and log["eval_loss"] < best_loss:
+                            best_loss = log["eval_loss"]
+                            best_checkpoint = checkpoint_dir
+            except (json.JSONDecodeError, KeyError):
+                continue
+    
+    return best_checkpoint or checkpoint_dirs[-1]  # Return most recent if no validation loss found
+
+def get_run_dirs() -> List[str]:
+    """Get all run directories, sorted by modification time (newest first)."""
+    run_dirs = sorted(
+        glob.glob(os.path.join(OUTPUT_DIR, "run_*")),
+        key=os.path.getmtime,
+        reverse=True
+    )
+    return [d for d in run_dirs if os.path.isdir(d)]
+
+def get_run_dir(run_spec: Optional[Union[int, str]] = None) -> Optional[Tuple[str, str]]:
+    """Get a specific run directory and its best checkpoint by number, path, or return the latest run.
+    
+    Returns:
+        Tuple of (run_dir, checkpoint_dir) or None if not found
+    """
+    if run_spec is None:
+        # Default to most recent run
+        runs = get_run_dirs()
+        if not runs:
+            return None
+        run_dir = runs[0]
+    elif isinstance(run_spec, int):
+        # Get run by number (1-based index)
+        runs = get_run_dirs()
+        if not (0 < run_spec <= len(runs)):
+            return None
+        run_dir = runs[run_spec - 1]
+    else:
+        # Assume it's a path
+        if not os.path.isdir(run_spec):
+            return None
+        run_dir = run_spec
+    
+    # Find best checkpoint in the run directory
+    checkpoint_dir = find_best_checkpoint(run_dir)
+    if checkpoint_dir is None:
+        print(f"Warning: No valid checkpoints found in {run_dir}")
+        return None
+    
+    return run_dir, checkpoint_dir
 
 
 class StopOnNewlineOrSpace(StoppingCriteria):
@@ -190,10 +273,222 @@ def run_evaluation(model, tokenizer, test_data, model_name):
     )
 
 
+def evaluate_run(run_dir: str, checkpoint_dir: str, test_data: List[dict], base_model_path: str = BASE_MODEL_PATH) -> dict:
+    """Evaluate a single model run.
+    
+    Args:
+        run_dir: Directory containing the run
+        checkpoint_dir: Directory containing the checkpoint to evaluate
+        test_data: List of test examples
+        base_model_path: Path to base model
+    
+    Returns:
+        Dictionary containing evaluation metrics
+    """
+    run_name = os.path.basename(run_dir)
+    print(f"\n{'='*70}")
+    print(f"EVALUATING RUN: {run_name}")
+    print(f"CHECKPOINT: {os.path.basename(checkpoint_dir) if checkpoint_dir != run_dir else 'best'}")
+    print("=" * 70)
+
+    try:
+        # Load base model with proper configuration
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model_path,
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+        )
+
+        # Load and merge LoRA weights
+        model = PeftModel.from_pretrained(model, checkpoint_dir, device_map="auto")
+        model = model.merge_and_unload()
+        model.eval()
+
+        # Load tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(base_model_path, trust_remote_code=True)
+        tokenizer.pad_token = tokenizer.eos_token
+        
+        # Run evaluation
+        accuracy, valid_rate, dist, results, diversity, balance, evolution = run_evaluation(
+            model, tokenizer, test_data, run_name
+        )
+
+        # Clean up
+        del model
+        del tokenizer
+        torch.cuda.empty_cache()
+
+        return {
+            "accuracy": accuracy,
+            "valid_rate": valid_rate,
+            "diversity": diversity,
+            "balance": balance,
+            "evolution": evolution,
+            "action_distribution": dist,
+            "results": results,
+        }
+    except Exception as e:
+        print(f"Error evaluating model: {str(e)}")
+        raise
+
+    # Run evaluation
+    accuracy, valid_rate, dist, results, diversity, balance, evolution = run_evaluation(
+        model, tokenizer, test_data, os.path.basename(run_dir)
+    )
+
+    # Clean up
+    del model
+    del tokenizer
+    torch.cuda.empty_cache()
+
+    return {
+        "accuracy": accuracy,
+        "valid_rate": valid_rate,
+        "diversity": diversity,
+        "balance": balance,
+        "evolution": evolution,
+        "action_distribution": dist,
+        "results": results,
+    }
+
+def evaluate_base_model(test_data: List[dict], base_model_path: str = BASE_MODEL_PATH) -> dict:
+    """Evaluate the base model without any fine-tuning."""
+    print("\n" + "=" * 70)
+    print("EVALUATING BASE MODEL")
+    print("=" * 70)
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model_path, trust_remote_code=True, device_map="auto"
+    )
+    tokenizer = AutoTokenizer.from_pretrained(base_model_path, trust_remote_code=True)
+    tokenizer.pad_token = tokenizer.eos_token
+    
+    accuracy, valid_rate, dist, results, diversity, balance, evolution = run_evaluation(
+        model, tokenizer, test_data, "Base Model"
+    )
+    
+    del model
+    del tokenizer
+    torch.cuda.empty_cache()
+    
+    return {
+        "accuracy": accuracy,
+        "valid_rate": valid_rate,
+        "diversity": diversity,
+        "balance": balance,
+        "evolution": evolution,
+        "action_distribution": dist,
+        "results": results,
+    }
+
+def save_evaluation_report(results: dict, output_path: str):
+    """Save evaluation results to a report file."""
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("=" * 70 + "\n")
+        f.write("MODEL EVALUATION REPORT\n")
+        f.write("=" * 70 + "\n\n")
+
+        for model_name, metrics in results.items():
+            f.write(f"{model_name} Performance:\n")
+            f.write("-" * 70 + "\n")
+            f.write(f"  Accuracy:         {metrics['accuracy']:.2f}%\n")
+            f.write(f"  Valid Rate:       {metrics['valid_rate']:.2f}%\n")
+            f.write(f"  Diversity:        {metrics['diversity']*100:.1f}%\n")
+            f.write(f"  Balance:          {metrics['balance']*100:.1f}%\n")
+            f.write(f"  Evolution Score:  {metrics['evolution']:.1f}%\n\n")
+
+            # Action distribution
+            f.write("  Action Distribution:\n")
+            for action, count in metrics['action_distribution'].items():
+                f.write(f"    {action}: {count}\n")
+            f.write("\n")
+
 if __name__ == "__main__":
-    test_data = None
+    parser = argparse.ArgumentParser(description="Evaluate fine-tuned models")
+    parser.add_argument(
+        "--run",
+        type=str,
+        default=None,
+        help="Run to evaluate (number, path, or 'all'). If not specified, evaluates the most recent run.",
+    )
+    parser.add_argument(
+        "--base",
+        action="store_true",
+        help="Include base model in evaluation",
+    )
+    args = parser.parse_args()
+
+    # Load test data
     with open(TEST_DATA_PATH, "r") as f:
         test_data = [json.loads(line) for line in f.readlines()]
+
+    results = {}
+
+    # Evaluate base model if requested
+    if args.base:
+        results["Base Model"] = evaluate_base_model(test_data)
+
+    # Determine which runs to evaluate
+    if args.run == "all":
+        run_dirs = get_run_dirs()
+        print(f"Found {len(run_dirs)} runs to evaluate")
+    else:
+        run_dirs = []
+        if args.run:
+            # Try to interpret as a run number or path
+            run_info = get_run_dir(args.run)
+            if run_info:
+                run_dirs = [args.run]  # Pass the original spec to get proper checkpoint handling
+            else:
+                print(f"Could not find run: {args.run}")
+        else:
+            # Default to most recent run
+            run_specs = get_run_dirs()
+            if run_specs:
+                run_dirs = [run_specs[0]]
+            else:
+                print("No runs found to evaluate")
+
+    # Evaluate each run
+    for run_spec in run_dirs:
+        try:
+            # Get run directory and best checkpoint
+            run_info = get_run_dir(run_spec)
+            if run_info is None:
+                print(f"Skipping invalid run: {run_spec}")
+                continue
+                
+            run_dir, checkpoint_dir = run_info
+            run_name = os.path.basename(run_dir)
+            
+            # Add checkpoint info to run name if it's a specific checkpoint
+            if checkpoint_dir != run_dir:
+                checkpoint_name = os.path.basename(checkpoint_dir)
+                run_name = f"{run_name} ({checkpoint_name})"
+                
+            results[run_name] = evaluate_run(run_dir, checkpoint_dir, test_data)
+        except Exception as e:
+            print(f"Error evaluating {run_spec}: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    # Print and save summary
+    if results:
+        # Print summary
+        print("\n" + "=" * 70)
+        print("EVALUATION SUMMARY")
+        print("=" * 70)
+        for model_name, metrics in results.items():
+            print(f"\n{model_name}:")
+            print(f"  Accuracy:         {metrics['accuracy']:.2f}%")
+            print(f"  Valid Rate:       {metrics['valid_rate']:.2f}%")
+            print(f"  Evolution Score:  {metrics['evolution']:.1f}%")
+
+        # Save detailed report
+        report_path = os.path.join(OUTPUT_DIR, "evaluation_report.txt")
+        save_evaluation_report(results, report_path)
+        print(f"\nDetailed report saved to: {report_path}")
 
     # --- 1. Evaluate Base Model ---
     print("\n" + "=" * 70)
@@ -224,17 +519,30 @@ if __name__ == "__main__":
     print("EVALUATING BEST LoRA ADAPTER")
     print("=" * 70)
 
+    # Load base model with proper configuration
     tuned_model = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL_PATH, trust_remote_code=True
+        BASE_MODEL_PATH,
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16,  # Match training precision
+        device_map="auto",  # Automatically handles device placement
     )
-    tuned_model = PeftModel.from_pretrained(tuned_model, LORA_ADAPTER_PATH)
+
+    # Load and merge LoRA weights
+    tuned_model: PeftModel = PeftModel.from_pretrained(
+        tuned_model, LORA_ADAPTER_PATH, device_map="auto"
+    )
+    tuned_model = tuned_model.merge_and_unload()  # Merge LoRA weights
+    tuned_model.eval()  # Set to evaluation mode
+
+    # Load tokenizer
     tuned_tokenizer = AutoTokenizer.from_pretrained(
         BASE_MODEL_PATH, trust_remote_code=True
     )
     tuned_tokenizer.pad_token = tuned_tokenizer.eos_token
 
-    accuracy, valid_rate, dist, results, diversity, balance, evolution = (
-        run_evaluation(tuned_model, tuned_tokenizer, test_data, "Best LoRA Adapter")
+    # Run evaluation
+    accuracy, valid_rate, dist, results, diversity, balance, evolution = run_evaluation(
+        tuned_model, tuned_tokenizer, test_data, "Best LoRA Adapter"
     )
 
     del tuned_model
@@ -306,9 +614,15 @@ if __name__ == "__main__":
         f.write("  Formula: 50% Valid Rate + 30% Diversity + 20% Balance\n")
         f.write("  Higher is better for evolutionary simulation starting point\n")
         f.write("- Valid Rate: Percentage of outputs that are valid actions\n")
-        f.write("- Diversity: Percentage of unique valid actions used (0-100%, max=5 actions)\n")
-        f.write("- Balance: How evenly distributed the actions are (entropy-based, 0-100%)\n")
-        f.write("- Accuracy: Percentage matching expected actions (less relevant for evolution)\n")
+        f.write(
+            "- Diversity: Percentage of unique valid actions used (0-100%, max=5 actions)\n"
+        )
+        f.write(
+            "- Balance: How evenly distributed the actions are (entropy-based, 0-100%)\n"
+        )
+        f.write(
+            "- Accuracy: Percentage matching expected actions (less relevant for evolution)\n"
+        )
         f.write("\nTest set size: {} examples\n".format(len(test_data)))
         f.write("\nFor training metrics, see TRAINING_REPORT_FINAL.txt\n")
 
