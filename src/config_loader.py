@@ -25,6 +25,12 @@ if _prompts_file_path:
 else:
     print("Warning: PROMPTS_FILE_PATH not set in .env file. Using empty defaults.")
 
+# Grid-related constants
+GRID_SIZE = 5  # Perception grid size (5x5 window)
+AGENT_POS = (2, 2)  # Agent always at center of perception
+
 # Expose the configuration values as module-level constants
 SYSTEM_PROMPT = _config.get('SYSTEM_PROMPT', '')
 VALID_ACTIONS = _config.get('VALID_ACTIONS', [])
+ENERGY_LEVELS = _config.get('ENERGY_LEVELS', {})
+GRID_SYMBOLS = _config.get('GRID_SYMBOLS', {})

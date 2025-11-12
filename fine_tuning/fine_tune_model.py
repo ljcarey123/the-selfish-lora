@@ -700,7 +700,7 @@ if __name__ == "__main__":
             train_dataset=train_dataset,
             eval_dataset=validation_dataset,
             dataset_text_field="text",
-            max_seq_length=512,
+            max_seq_length=256,
             tokenizer=tokenizer,
             args=final_training_args,
             packing=False,

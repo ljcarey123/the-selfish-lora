@@ -113,7 +113,7 @@ def get_run_dir(
 class StopOnNewlineOrSpace(StoppingCriteria):
     """Stop generation when we encounter newline, space after a word, or punctuation."""
 
-    def __init__(self, tokenizer, start_length):
+    def __init__(self, tokenizer: AutoTokenizer, start_length: int) -> None:
         self.tokenizer = tokenizer
         self.start_length = start_length
         self.stop_tokens = set(
@@ -132,7 +132,7 @@ class StopOnNewlineOrSpace(StoppingCriteria):
         )
         self.stop_tokens.discard(None)
 
-    def __call__(self, input_ids, scores, **kwargs):
+    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor, **kwargs) -> bool:
         # Check if we've generated at least one token beyond the prompt
         if input_ids.shape[1] <= self.start_length:
             return False
@@ -157,7 +157,11 @@ class StopOnNewlineOrSpace(StoppingCriteria):
         return False
 
 
-def get_model_prediction(model, tokenizer, example):
+def get_model_prediction(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    example: List[Dict[str, str]]
+) -> Tuple[str, str]:
     # Prepare the input with chat template
     chat_template = tokenizer.apply_chat_template(
         example, tokenize=False, add_generation_prompt=True
@@ -170,13 +174,14 @@ def get_model_prediction(model, tokenizer, example):
         StopOnNewlineOrSpace(tokenizer, start_length)
     ])
 
-    # Generate with deterministic settings for evolutionary tasks
+    # Generate with sampling for diversity (helps small models)
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
             max_new_tokens=10,  # Just enough for action words
-            temperature=0.1,  # Low temperature for deterministic outputs
-            do_sample=False,  # Greedy decoding for consistency
+            temperature=0.7,  # Balanced: enough diversity for evolution, not too random
+            do_sample=True,  # Enable sampling for diversity
+            top_p=0.9,  # Nucleus sampling
             num_return_sequences=1,
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
@@ -198,7 +203,12 @@ def get_model_prediction(model, tokenizer, example):
     return raw_output, parsed_action
 
 
-def run_evaluation(model, tokenizer, test_data, model_name):
+def run_evaluation(
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    test_data: List[List[Dict[str, str]]],
+    model_name: str
+) -> Dict[str, Any]:
     print(f"\n{'='*20} EVALUATING: {model_name.upper()} {'='*20}")
     correct_predictions = 0
     total_predictions = len(test_data)
@@ -289,8 +299,10 @@ def run_evaluation(model, tokenizer, test_data, model_name):
 
 @contextmanager
 def model_manager(
-    model_path: str, is_lora: bool = False, checkpoint_path: Optional[str] = None
-) -> Generator[Tuple[Any, Any], None, None]:
+    model_path: str,
+    is_lora: bool = False,
+    checkpoint_path: Optional[str] = None
+) -> Generator[Tuple[AutoModelForCausalLM, AutoTokenizer], None, None]:
     """Context manager for loading and cleaning up models.
 
     Args:
@@ -341,9 +353,9 @@ def model_manager(
 def evaluate_run(
     run_dir: str,
     checkpoint_dir: str,
-    test_data: List[dict],
+    test_data: List[List[Dict[str, str]]],
     base_model_path: str = BASE_MODEL_PATH,
-) -> dict:
+) -> Dict[str, Any]:
     """Evaluate a single model run.
 
     Args:
@@ -388,8 +400,9 @@ def evaluate_run(
 
 
 def evaluate_base_model(
-    test_data: List[dict], base_model_path: str = BASE_MODEL_PATH
-) -> dict:
+    test_data: List[List[Dict[str, str]]],
+    base_model_path: str = BASE_MODEL_PATH
+) -> Dict[str, Any]:
     """Evaluate the base model without any fine-tuning."""
     print("\n" + "=" * 70)
     print("EVALUATING BASE MODEL")
@@ -416,7 +429,42 @@ def evaluate_base_model(
         raise
 
 
-def save_evaluation_report(results: dict, output_path: str):
+def save_detailed_predictions(
+    model_name: str,
+    results: List[Dict[str, str]],
+    output_dir: str
+) -> None:
+    """Save detailed predictions for a model to a separate file."""
+    # Sanitize model name for filename
+    safe_name = model_name.replace(" ", "_").replace("/", "_").lower()
+    predictions_path = os.path.join(output_dir, f"predictions_{safe_name}.txt")
+
+    with open(predictions_path, "w", encoding="utf-8") as f:
+        f.write("=" * 70 + "\n")
+        f.write(f"DETAILED PREDICTIONS: {model_name}\n")
+        f.write("=" * 70 + "\n\n")
+
+        correct = 0
+        for i, res in enumerate(results, 1):
+            is_correct = res["predicted"] == res["true"]
+            if is_correct:
+                correct += 1
+            status = "[MATCH]" if is_correct else "[DIFF] "
+
+            f.write(f"{i:3d}. {status} Raw: '{res['raw_output']}'\n")
+            f.write(f"            -> Predicted: '{res['predicted']}'\n")
+            f.write(f"            -> Expected:  '{res['true']}'\n\n")
+
+        f.write("=" * 70 + "\n")
+        f.write(f"Summary: {correct}/{len(results)} correct ({correct/len(results)*100:.2f}%)\n")
+
+    print(f"  Detailed predictions saved to: {predictions_path}")
+
+
+def save_evaluation_report(
+    results: Dict[str, Dict[str, Any]],
+    output_path: str
+) -> None:
     """Save evaluation results to a report file."""
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("=" * 70 + "\n")
@@ -452,6 +500,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Include base model in evaluation",
     )
+    parser.add_argument(
+        "--base-only",
+        action="store_true",
+        help="Only evaluate base model (skip all fine-tuned runs)",
+    )
     args = parser.parse_args()
 
     # Load test data
@@ -460,17 +513,22 @@ if __name__ == "__main__":
 
     results = {}
 
-    # Evaluate base model if requested
-    if args.base:
+    # If base-only mode, only evaluate base model and exit
+    if args.base_only:
+        results["Base Model"] = evaluate_base_model(test_data)
+        # Skip to summary and exit
+        run_dirs = []
+    elif args.base:
+        # Evaluate base model in addition to fine-tuned runs
         results["Base Model"] = evaluate_base_model(test_data)
 
-    # Determine which runs to evaluate
-    if args.run == "all":
-        run_dirs = get_run_dirs()
-        print(f"Found {len(run_dirs)} runs to evaluate")
-    else:
-        run_dirs = []
-        if args.run:
+    # Determine which runs to evaluate (skip if base-only mode)
+    run_dirs = []
+    if not args.base_only:
+        if args.run == "all":
+            run_dirs = get_run_dirs()
+            print(f"Found {len(run_dirs)} runs to evaluate")
+        elif args.run:
             # Try to interpret as a run number or path
             run_info = get_run_dir(args.run)
             if run_info:
@@ -531,10 +589,16 @@ if __name__ == "__main__":
             print(f"  Valid Rate:       {metrics['valid_rate']:.2f}%")
             print(f"  Evolution Score:  {metrics['evolution']:.1f}%")
 
+        # Save detailed predictions for each model
+        print("\nSaving detailed predictions for each model...")
+        for model_name, metrics in results.items():
+            if 'results' in metrics and metrics['results']:
+                save_detailed_predictions(model_name, metrics['results'], OUTPUT_DIR)
+
         # Save detailed report
         report_path = os.path.join(OUTPUT_DIR, "evaluation_report.txt")
         save_evaluation_report(results, report_path)
-        print(f"\nDetailed report saved to: {report_path}")
+        print(f"\nSummary report saved to: {report_path}")
         
         # Print metric definitions
         print("\n" + "=" * 70)
@@ -556,7 +620,7 @@ if __name__ == "__main__":
             print("DETAILED PREDICTIONS - Best Run")
             print("=" * 70 + "\n")
             
-            for i, res in enumerate(best_run['results'][:5], 1):  # Show first 5 examples
-                status = "✅" if res["predicted"] == res["true"] else "❌"
+            for i, res in enumerate(best_run['results'][:20], 1):  # Show first 20 examples
+                status = "[MATCH]" if res["predicted"] == res["true"] else "[DIFF] "
                 print(f"{i:2d}. {status} Raw Output: '{res['raw_output']}'")
-                print(f"       → Parsed as: '{res['predicted']}'  |  Expected: '{res['true']}'\n")
+                print(f"       -> Parsed as: '{res['predicted']}'  |  Expected: '{res['true']}'\n")

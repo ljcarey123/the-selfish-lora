@@ -2,7 +2,55 @@ import numpy as np
 import random
 import torch
 import re
-from config_loader import SYSTEM_PROMPT, VALID_ACTIONS
+from config_loader import SYSTEM_PROMPT, VALID_ACTIONS, GRID_SYMBOLS, AGENT_POS
+from transformers import StoppingCriteria, StoppingCriteriaList
+
+
+class StopOnNewlineOrSpace(StoppingCriteria):
+    """Stop generation when we encounter newline, space after a word, or punctuation."""
+
+    def __init__(self, tokenizer, start_length: int) -> None:
+        self.tokenizer = tokenizer
+        self.start_length = start_length
+        self.stop_tokens = set(
+            [
+                (
+                    tokenizer.encode("\n", add_special_tokens=False)[0]
+                    if tokenizer.encode("\n", add_special_tokens=False)
+                    else None
+                ),
+                (
+                    tokenizer.encode(",", add_special_tokens=False)[0]
+                    if tokenizer.encode(",", add_special_tokens=False)
+                    else None
+                ),
+            ]
+        )
+        self.stop_tokens.discard(None)
+
+    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor, **kwargs) -> bool:
+        # Check if we've generated at least one token beyond the prompt
+        if input_ids.shape[1] <= self.start_length:
+            return False
+
+        # Get the last generated token
+        last_token = input_ids[0, -1].item()
+
+        # Stop if we hit a stop token
+        if last_token in self.stop_tokens:
+            return True
+
+        # Decode the generated text to check for word boundaries
+        generated_ids = input_ids[0, self.start_length :]
+        generated_text = self.tokenizer.decode(
+            generated_ids, skip_special_tokens=True
+        ).strip()
+
+        # Stop if we have a complete word (contains space or has length > 2)
+        if " " in generated_text or len(generated_text.split()) > 1:
+            return True
+
+        return False
 
 
 class LoraBrain:
@@ -28,32 +76,47 @@ class LoraBrain:
         """Sets the brain's LoRA weights."""
         self.weights = new_weights
 
-    def _format_grid(self, perception: np.ndarray) -> str:
-        """Formats the agent's perception grid into a string for the LLM prompt."""
-        # Mapping from grid values to characters
-        tiles = {0: ".", 1: "R", -1: "W"}
+    def _format_grid(self, perception: np.ndarray, agent_on_resource: bool = False) -> str:
+        """Formats the agent's perception grid into a string for the LLM prompt.
+
+        Args:
+            perception: 5x5 numpy array with symbolic characters (., R, W, etc.)
+            agent_on_resource: Whether agent is standing on a resource
+
+        Returns:
+            Formatted grid string with agent at center (A or @)
+        """
         grid_lines = []
+        agent_r, agent_c = AGENT_POS  # (2, 2) - center of 5x5 grid
+
         for i, row in enumerate(perception):
-            row_str = " ".join([tiles.get(val, "?") for val in row])
-            # The agent is always at the center
-            if i == 1:
-                row_str = (
-                    row_str[:2] + "A" + row_str[3:]
-                )  # Replace middle character with 'A'
+            row_str = " ".join(str(cell) for cell in row)
+            # The agent is always at the center (2, 2) in the 5x5 perception
+            if i == agent_r:
+                # Replace center position with A or @ (if on resource)
+                symbol = GRID_SYMBOLS["on_resource"] if agent_on_resource else GRID_SYMBOLS["agent"]
+                # Replace the character at position agent_c*2 (accounting for spaces)
+                chars = list(row_str)
+                chars[agent_c * 2] = symbol
+                row_str = "".join(chars)
             grid_lines.append(row_str)
         return "\n".join(grid_lines)
 
     def _parse_llm_response(self, response: str) -> str:
-        """Finds the chosen action in the LLM's response using a regex."""
-        match = re.search(r"ACTION:\s*([A-Z_]+)", response.upper())
-        if match:
-            action = match.group(1)
-            if action in self.ACTIONS:
-                return action
+        """Finds the chosen action in the LLM's response (expects lowercase snake_case)."""
+        # Clean the response
+        response_clean = response.strip().lower()
+
+        # Check for exact matches first (most reliable)
         for action in self.ACTIONS:
-            # Use regex to find whole word matches, case-insensitive
-            if re.search(r"\b" + action + r"\b", response, re.IGNORECASE):
+            if action.lower() in response_clean:
                 return action
+
+        # If no match found, try case-insensitive word boundary search
+        for action in self.ACTIONS:
+            if re.search(r"\b" + re.escape(action) + r"\b", response, re.IGNORECASE):
+                return action
+
         return None  # Return None if no action is found
 
     def choose_action(
@@ -62,7 +125,9 @@ class LoraBrain:
         base_model,
         tokenizer,
         agent_id: str,
-        action_history: list[str],
+        energy: float,
+        last_action: str = None,
+        agent_on_resource: bool = False,
     ) -> str:
         with torch.no_grad():
             # 1. Inject the agent's unique LoRA weights into the base model
@@ -71,24 +136,24 @@ class LoraBrain:
                     param.data.copy_(self.weights[name])
 
         # 2. Create the prompt using the exact format from fine-tuning
-        grid_representation = self._format_grid(perception)
+        grid_representation = self._format_grid(perception, agent_on_resource)
 
         system_prompt = SYSTEM_PROMPT
 
-        # Format history to match fine-tuning format (last 3 actions)
-        history_formatted = action_history[-3:] if action_history else []
-        # Pad with empty strings if less than 3
-        while len(history_formatted) < 3:
-            history_formatted.insert(0, "")
-
-        history_str = "\n".join(f"- {h}" if h else "-" for h in history_formatted)
+        # Determine energy level string
+        if energy < 0.3:
+            energy_level = "low"
+        elif energy < 0.7:
+            energy_level = "medium"
+        else:
+            energy_level = "high"
 
         # Build the user prompt exactly as in fine-tuning
         user_prompt = f"""PERCEPTION:
 {grid_representation}
 
-HISTORY (Last 3 actions):
-{history_str}
+Energy: {energy:.2f} ({energy_level})
+Last action: {last_action if last_action else "None"}
 
 ACTION:"""
 
@@ -114,12 +179,21 @@ ACTION:"""
         model_inputs = tokenizer(prompt_string, return_tensors="pt").to(
             base_model.device
         )
+
+        # Create stopping criteria to end generation early when action is complete
+        start_length = model_inputs.input_ids.shape[1]
+        stopping_criteria = StoppingCriteriaList([StopOnNewlineOrSpace(tokenizer, start_length)])
+
         with torch.no_grad():
             outputs = base_model.generate(
                 **model_inputs,
                 max_new_tokens=10,
-                do_sample=False,  # Use greedy decoding for deterministic outputs
+                temperature=0.7,  # Balanced: enough diversity for evolution, not too random
+                do_sample=True,  # Enable sampling for diversity
+                top_p=0.9,  # Nucleus sampling
                 pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+                stopping_criteria=stopping_criteria,
             )
         # For chat templates, we need to decode only the newly generated tokens
         response_ids = outputs[0][model_inputs.input_ids.shape[-1] :]

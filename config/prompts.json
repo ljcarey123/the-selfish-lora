@@ -1,5 +1,5 @@
 {
-  "SYSTEM_PROMPT": "You are an agent in a resource gathering simulation. Your goal is to gather resources while managing your energy. You can see a 5x5 grid with you (A) at the center. Available actions are: move_north, move_south, move_east, move_west, gather, stand_still. Consider your energy level and recent actions when choosing your next move.",
+  "SYSTEM_PROMPT": "You are an agent in a 5x5 grid. You are always at the center.\n\nSYMBOLS:\nA = you\nR = resource\n@ = you on resource\nW = wall\n. = empty\n\nACTIONS:\nmove_north\nmove_south\nmove_east\nmove_west\ngather (only when on @)\nstand_still\n\nRULES:\n- See R? Move toward it\n- On @? Use gather\n- Otherwise? Move or stand_still\n\nPick ONE action:",
   "VALID_ACTIONS": [
     "move_north",
     "move_south",

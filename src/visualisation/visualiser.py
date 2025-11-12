@@ -5,16 +5,16 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
 
-class Visualizer:
+class Visualiser:
     """
-    Handles the visualization of the simulation results.
+    Handles the visualisation of the simulation results.
     """
 
     def __init__(self, data_path=None, data=None, grid_size=50):
         """
-        Initializes the Visualizer.
+        Initialises the Visualiser.
 
-        Can be initialized either from a file path or a direct data dictionary.
+        Can be initialised either from a file path or a direct data dictionary.
 
         Args:
             data_path (str, optional): Path to the simulation data JSON file.
@@ -29,40 +29,97 @@ class Visualizer:
         elif data:
             self.data = data
         else:
-            raise ValueError("Visualizer must be initialized with either 'data_path' or 'data'.")
+            raise ValueError("Visualiser must be initialised with either 'data_path' or 'data'.")
 
+    def _convert_to_numeric_grid(self, symbolic_grid):
+        """
+        Converts a symbolic grid (with 'R', '.', etc.) to a numeric grid for visualization.
 
+        Args:
+            symbolic_grid: numpy array with string symbols
+
+        Returns:
+            numpy array with numeric values (1 for resource, 0 for empty)
+        """
+        numeric_grid = np.zeros(symbolic_grid.shape)
+        # Mark resources as 1, everything else as 0
+        numeric_grid[symbolic_grid == 'R'] = 1
+        return numeric_grid
 
     def animate_top_n_champion_paths(
         self, generation, n=3, save_as_gif=True
     ):
         """
         Creates an animation of the top n champions' paths for a given generation.
+        In tournament mode, creates separate animations for each tournament.
 
         Args:
             generation (int): The generation number to animate.
             n (int): The number of top champions to display.
             save_as_gif (bool): If True, saves the animation as a GIF.
         """
-        paths = self.data["champion_paths_by_gen"].get(str(generation))
-        if paths is None:
-            print(f"Error: No champion paths found for generation {generation}.")
-            return
-        if len(paths) < n:
-            print(f"Warning: Only {len(paths)} champion paths for generation {generation}, showing all.")
-            n = len(paths)  # Show all available paths
+        is_tournament_mode = self.data.get('tournament_mode', False)
+        tournament_history = self.data.get('tournament_history', {})
 
+        # Check if we have tournament-specific data for this generation
+        if is_tournament_mode and str(generation) in tournament_history:
+            # Tournament mode: create separate animation for each tournament
+            tournaments = tournament_history[str(generation)]
+            print(f"Tournament mode detected: creating {len(tournaments)} separate animations")
+
+            for tournament_idx, tournament_data in enumerate(tournaments):
+                self._animate_single_tournament(
+                    generation, tournament_idx, tournament_data, n, save_as_gif
+                )
+        else:
+            # Standard mode: single animation using champion_paths_by_gen
+            paths = self.data["champion_paths_by_gen"].get(str(generation))
+            if paths is None:
+                print(f"Error: No champion paths found for generation {generation}.")
+                return
+            if len(paths) < n:
+                print(f"Warning: Only {len(paths)} champion paths for generation {generation}, showing all.")
+                n = len(paths)
+
+            # Load environment
+            history_key = "initial_environment_history"
+            if history_key not in self.data:
+                print(f"Warning: '{history_key}' not found. Falling back to 'environment_history'.")
+                history_key = "environment_history"
+            resource_grid = np.array(self.data[history_key][str(generation)])
+
+            # Create the animation
+            self._create_path_animation(
+                paths[:n], resource_grid, generation, n, save_as_gif,
+                title_suffix=""
+            )
+
+    def _animate_single_tournament(self, generation, tournament_idx, tournament_data, n, save_as_gif):
+        """Helper method to animate a single tournament."""
+        champion_paths = tournament_data.get('champion_paths', [])
+        if not champion_paths:
+            print(f"No champion paths for tournament {tournament_idx + 1}")
+            return
+
+        n_paths = min(n, len(champion_paths))
+        resource_grid = np.array(tournament_data['environment'])
+
+        self._create_path_animation(
+            champion_paths[:n_paths], resource_grid, generation, n_paths, save_as_gif,
+            title_suffix=f" - Tournament {tournament_idx + 1}",
+            filename_suffix=f"_tournament_{tournament_idx + 1}"
+        )
+
+    def _create_path_animation(self, paths, resource_grid, generation, n, save_as_gif,
+                               title_suffix="", filename_suffix=""):
+        """Helper method to create a single path animation."""
         fig, ax = plt.subplots(figsize=(10, 10))
-        ax.set_title(f"Top {n} Champion Paths - Generation {generation}")
+        ax.set_title(f"Top {n} Champion Paths - Generation {generation}{title_suffix}")
         ax.set_xticks([]), ax.set_yticks([])
 
-        # Load the initial environment for the specified generation to show all original resources
-        history_key = "initial_environment_history"
-        if history_key not in self.data:
-            print(f"Warning: '{history_key}' not found. Falling back to 'environment_history'.")
-            history_key = "environment_history"
-        resource_grid = np.array(self.data[history_key][str(generation)])
-        ax.imshow(resource_grid, cmap="Greens", alpha=0.3)
+        # Convert symbolic grid to numeric for visualization
+        numeric_grid = self._convert_to_numeric_grid(resource_grid)
+        ax.imshow(numeric_grid, cmap="Greens", alpha=0.3)
 
         colors = plt.cm.jet(np.linspace(0, 1, n))
         agent_markers = []
@@ -138,9 +195,9 @@ class Visualizer:
             gifs_dir = os.path.join("output", "gifs")
             if not os.path.exists(gifs_dir):
                 os.makedirs(gifs_dir)
-            gif_path = os.path.join(gifs_dir, f"champion_paths_gen_{generation}_top_{n}.gif")
+            gif_path = os.path.join(gifs_dir, f"champion_paths_gen_{generation}_top_{n}{filename_suffix}.gif")
             ani.save(gif_path, writer="pillow")
-            print(f"Animation for generation {generation} saved to {gif_path}")
+            print(f"Animation saved to {gif_path}")
         else:
             plt.show()
         plt.close(fig)
@@ -267,53 +324,6 @@ class Visualizer:
             plt.legend()
             plt.show()
 
-    def plot_performance_metrics(self, save_as_png=True):
-        """
-        Plots the collected performance metrics over generations.
-
-        Args:
-            save_as_png (bool): If True, saves the plot as a PNG image.
-        """
-        history = self.data['performance_history']
-        if not history:
-            print("No performance history to plot.")
-            return
-
-        generations = range(len(history))
-        avg_fitness = [g['average_fitness'] for g in history]
-        max_fitness = [g['max_fitness'] for g in history]
-        min_fitness = [g['min_fitness'] for g in history]
-        std_dev = [g['std_dev_fitness'] for g in history]
-
-        avg_fitness = np.array(avg_fitness)
-        std_dev = np.array(std_dev)
-
-        fig, ax = plt.subplots(figsize=(12, 7))
-        ax.plot(generations, avg_fitness, 'b-', label='Average Fitness')
-        ax.plot(generations, max_fitness, 'g--', label='Maximum Fitness')
-        ax.plot(generations, min_fitness, 'r:', label='Minimum Fitness')
-
-        # Add a shaded region for the standard deviation, ensuring it doesn't go below zero
-        lower_bound = np.maximum(0, avg_fitness - std_dev)
-        ax.fill_between(generations, lower_bound, avg_fitness + std_dev,
-                        color='blue', alpha=0.1, label='Std. Deviation')
-
-        ax.set_title('Population Fitness Over Generations')
-        ax.set_xlabel('Generation')
-        ax.set_ylabel('Fitness Score')
-        ax.legend()
-        ax.grid(True, linestyle='--', alpha=0.6)
-
-        if save_as_png:
-            output_dir = 'output'
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
-            png_path = os.path.join(output_dir, 'performance_metrics.png')
-            plt.savefig(png_path)
-            print(f'Performance plot saved to {png_path}')
-        else:
-            plt.show()
-
     def plot_genetic_diversity(self, save_as_png=True):
         """
         Plots the genetic diversity of the population over generations.
@@ -347,16 +357,16 @@ class Visualizer:
         else:
             plt.show()
 
-    def plot_behavioral_metrics(self, save_as_png=True):
+    def plot_behavioural_metrics(self, save_as_png=True):
         """
         Plots the distribution of agent actions over generations.
 
         Args:
             save_as_png (bool): If True, saves the plot as a PNG image.
         """
-        history = self.data['behavioral_history']
+        history = self.data['behavioural_history']
         if not history:
-            print("No behavioral history to plot.")
+            print("No behavioural history to plot.")
             return
 
         # Get all unique action types across the entire simulation
@@ -389,70 +399,119 @@ class Visualizer:
             output_dir = 'output'
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
-            png_path = os.path.join(output_dir, 'behavioral_metrics.png')
+            png_path = os.path.join(output_dir, 'behavioural_metrics.png')
             plt.savefig(png_path)
-            print(f'Behavioral metrics plot saved to {png_path}')
+            print(f'Behavioural metrics plot saved to {png_path}')
         else:
             plt.show()
 
     def plot_agent_heatmap(self, generation, save_as_png=True):
         """
         Creates a heatmap showing where agents spent time during a generation.
-        
+        In tournament mode, creates subplots for each tournament side-by-side.
+
         Args:
-            generation (int): The generation to visualize.
+            generation (int): The generation to visualise.
             save_as_png (bool): If True, saves the plot as a PNG image.
         """
         generation_str = str(generation)
-        
-        # Get all agent paths for this generation
-        if 'champion_paths_by_gen' in self.data and generation_str in self.data['champion_paths_by_gen']:
-            paths = self.data['champion_paths_by_gen'][generation_str]
+        is_tournament_mode = self.data.get('tournament_mode', False)
+        tournament_history = self.data.get('tournament_history', {})
+
+        # Check if we have tournament-specific data for this generation
+        if is_tournament_mode and generation_str in tournament_history:
+            # Tournament mode: create subplots for each tournament
+            tournaments = tournament_history[generation_str]
+            n_tournaments = len(tournaments)
+
+            # Create subplots (1 row, n_tournaments columns)
+            fig, axes = plt.subplots(1, n_tournaments, figsize=(8 * n_tournaments, 8))
+            if n_tournaments == 1:
+                axes = [axes]  # Make it iterable
+
+            print(f"Creating heatmap with {n_tournaments} tournament subplots")
+
+            for tournament_idx, (ax, tournament_data) in enumerate(zip(axes, tournaments)):
+                # Get paths from all_agent_paths for this tournament
+                all_paths = list(tournament_data.get('all_agent_paths', {}).values())
+                resource_grid = np.array(tournament_data['environment'])
+
+                # Create heatmap for this tournament
+                heatmap = np.zeros((self.grid_size, self.grid_size))
+                for path in all_paths:
+                    for action, pos in path:
+                        if action != "START":
+                            x, y = pos
+                            if 0 <= x < self.grid_size and 0 <= y < self.grid_size:
+                                heatmap[x, y] += 1
+
+                # Plot the heatmap
+                im = ax.imshow(heatmap, cmap='YlOrRd', alpha=0.8)
+
+                # Overlay resource locations (convert symbolic grid to mask)
+                resource_mask = (resource_grid == 'R')
+                ax.contour(resource_mask, colors='green', linewidths=2, levels=[0.5])
+
+                # Add colorbar
+                cbar = plt.colorbar(im, ax=ax)
+                cbar.set_label('Visits', rotation=270, labelpad=15, fontsize=9)
+
+                ax.set_title(f'Tournament {tournament_idx + 1}', fontsize=12)
+                ax.set_xlabel('Y Position')
+                ax.set_ylabel('X Position')
+
+            fig.suptitle(f'Agent Movement Heatmaps - Generation {generation}\n(Green outlines = Resources)',
+                        fontsize=14, y=0.98)
+            plt.tight_layout(rect=[0, 0, 1, 0.96])
+
         else:
-            print(f"No path data found for generation {generation}")
-            return
-        
-        # Create a heatmap grid
-        heatmap = np.zeros((self.grid_size, self.grid_size))
-        
-        # Count visits to each cell
-        for path in paths:
-            for action, pos in path:
-                if action != "START":  # Skip the start marker
-                    x, y = pos
-                    if 0 <= x < self.grid_size and 0 <= y < self.grid_size:
-                        heatmap[x, y] += 1
-        
-        # Get the environment to show resources
-        history_key = "initial_environment_history"
-        if history_key not in self.data:
-            history_key = "environment_history"
-        
-        if generation_str in self.data.get(history_key, {}):
-            resource_grid = np.array(self.data[history_key][generation_str])
-        else:
-            resource_grid = None
-        
-        # Create the plot
-        fig, ax = plt.subplots(figsize=(12, 10))
-        
-        # Plot the heatmap
-        im = ax.imshow(heatmap, cmap='YlOrRd', alpha=0.8)
-        
-        # Overlay resource locations if available
-        if resource_grid is not None:
-            # Show resources as green contours
-            resource_mask = (resource_grid == 1)
-            ax.contour(resource_mask, colors='green', linewidths=2, levels=[0.5])
-        
-        # Add colorbar
-        cbar = plt.colorbar(im, ax=ax)
-        cbar.set_label('Number of Agent Visits', rotation=270, labelpad=20)
-        
-        ax.set_title(f'Agent Movement Heatmap - Generation {generation}\n(Green outlines = Resources)')
-        ax.set_xlabel('Y Position')
-        ax.set_ylabel('X Position')
-        
+            # Standard mode: single heatmap
+            if 'champion_paths_by_gen' in self.data and generation_str in self.data['champion_paths_by_gen']:
+                paths = self.data['champion_paths_by_gen'][generation_str]
+            else:
+                print(f"No path data found for generation {generation}")
+                return
+
+            # Create a heatmap grid
+            heatmap = np.zeros((self.grid_size, self.grid_size))
+
+            # Count visits to each cell
+            for path in paths:
+                for action, pos in path:
+                    if action != "START":
+                        x, y = pos
+                        if 0 <= x < self.grid_size and 0 <= y < self.grid_size:
+                            heatmap[x, y] += 1
+
+            # Get the environment to show resources
+            history_key = "initial_environment_history"
+            if history_key not in self.data:
+                history_key = "environment_history"
+
+            if generation_str in self.data.get(history_key, {}):
+                resource_grid = np.array(self.data[history_key][generation_str])
+            else:
+                resource_grid = None
+
+            # Create the plot
+            fig, ax = plt.subplots(figsize=(12, 10))
+
+            # Plot the heatmap
+            im = ax.imshow(heatmap, cmap='YlOrRd', alpha=0.8)
+
+            # Overlay resource locations if available (symbolic grid)
+            if resource_grid is not None:
+                resource_mask = (resource_grid == 'R')
+                ax.contour(resource_mask, colors='green', linewidths=2, levels=[0.5])
+
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax)
+            cbar.set_label('Number of Agent Visits', rotation=270, labelpad=20)
+
+            ax.set_title(f'Agent Movement Heatmap - Generation {generation}\n(Green outlines = Resources)')
+            ax.set_xlabel('Y Position')
+            ax.set_ylabel('X Position')
+
         if save_as_png:
             output_dir = 'output'
             if not os.path.exists(output_dir):
@@ -477,23 +536,23 @@ def main():
         print("Please run the simulation first (`python main.py`)")
         return
 
-    visualizer = Visualizer(data_path)
+    visualiser = Visualiser(data_path)
 
     # Animate the top champion of the first generation as a test
-    print("Visualizing top champion path for generation 0...")
-    visualizer.animate_champion_path(generation=0, champion_rank=0)
+    print("Visualising top champion path for generation 0...")
+    visualiser.animate_champion_path(generation=0, champion_rank=0)
 
     # Plot the performance metrics
     print("\nPlotting performance metrics...")
-    visualizer.plot_performance_metrics()
+    visualiser.plot_performance_metrics()
 
     # Plot the genetic diversity
     print("\nPlotting genetic diversity...")
-    visualizer.plot_genetic_diversity()
+    visualiser.plot_genetic_diversity()
 
-    # Plot the behavioral metrics
-    print("\nPlotting behavioral metrics...")
-    visualizer.plot_behavioral_metrics()
+    # Plot the behavioural metrics
+    print("\nPlotting behavioural metrics...")
+    visualiser.plot_behavioural_metrics()
 
 
 if __name__ == "__main__":
