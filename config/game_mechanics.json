@@ -1,0 +1,17 @@
+{
+  "energy": {
+    "initial": 100,
+    "metabolism_cost": 2,
+    "food_reward": 30,
+    "combat_attacker_gain": 10,
+    "combat_victim_loss": 10,
+    "death_threshold": 0
+  },
+  "combat": {
+    "enabled": true,
+    "energy_transfer": true
+  },
+  "food": {
+    "regrowth_rate": 0.05
+  }
+}

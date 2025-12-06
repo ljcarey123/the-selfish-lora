@@ -56,6 +56,11 @@ class VectorizedEnvironment:
         with open(config_path, 'r') as f:
             self.prompt_config = json.load(f)
 
+        # Load game mechanics configuration
+        mechanics_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "game_mechanics.json")
+        with open(mechanics_path, 'r') as f:
+            self.game_mechanics = json.load(f)
+
         # Managers
         self.generation_manager = GenerationManager()
         self.generation_manager.set_generation(generation)
@@ -152,19 +157,22 @@ class VectorizedEnvironment:
         # Place food (vectorized)
         self.grid[food_positions[:, 0], food_positions[:, 1]] = GRID_INT_ENCODING[GRID_SYMBOLS["food"]]
 
-        # Track energy
-        self.total_energy_spawned = num_food * 30
+        # Track energy (from config)
+        food_reward = self.game_mechanics["energy"]["food_reward"]
+        self.total_energy_spawned = num_food * food_reward
 
         # Suppress verbose output (called for each batch)
 
-    def register_agents(self, agent_ids: List[str], initial_energy: float = 100.0):
+    def register_agents(self, agent_ids: List[str], initial_energy: float = None):
         """
         Register multiple agents at once (vectorized).
 
         Args:
             agent_ids: List of agent identifiers
-            initial_energy: Starting energy for all agents
+            initial_energy: Starting energy for all agents (defaults to config value)
         """
+        if initial_energy is None:
+            initial_energy = self.game_mechanics["energy"]["initial"]
         n = len(agent_ids)
 
         # Find valid spawn positions
@@ -459,17 +467,20 @@ class VectorizedEnvironment:
                 victim_idx = self.position_to_agent_idx[new_pos_tuple]
                 victim_id = self.agent_ids[victim_idx]
 
-                # Combat: attacker gains +5, victim loses -10
-                self.agent_energies[agent_idx] += 5
-                self.agent_energy_collected[agent_idx] += 5
-                self.combat_energy_transferred[agent_idx] += 5
+                # Combat: attacker gains energy, victim loses energy (from config)
+                attacker_gain = self.game_mechanics["energy"]["combat_attacker_gain"]
+                victim_loss = self.game_mechanics["energy"]["combat_victim_loss"]
+
+                self.agent_energies[agent_idx] += attacker_gain
+                self.agent_energy_collected[agent_idx] += attacker_gain
+                self.combat_energy_transferred[agent_idx] += attacker_gain
 
                 results[agent_id] = {
                     "success": False,
-                    "energy_change": 5,
+                    "energy_change": attacker_gain,
                     "reason": f"Attacked agent {victim_id}",
                     "combat_victim": victim_id,
-                    "victim_damage": -10
+                    "victim_damage": -victim_loss
                 }
                 continue
 
@@ -482,9 +493,10 @@ class VectorizedEnvironment:
             energy_change = 0
             reason = "Moved successfully"
             if target_cell == GRID_INT_ENCODING[GRID_SYMBOLS["food"]]:
-                energy_change = 30
-                reason = "Collected food (+30 energy)"
-                self.agent_energy_collected[agent_idx] += 30
+                food_reward = self.game_mechanics["energy"]["food_reward"]
+                energy_change = food_reward
+                reason = f"Collected food (+{food_reward} energy)"
+                self.agent_energy_collected[agent_idx] += food_reward
 
             # Update position
             self.agent_positions[agent_idx] = [new_x, new_y]
@@ -504,14 +516,17 @@ class VectorizedEnvironment:
 
         return results
 
-    def apply_combat_damage(self, victim_ids: List[str], damage: int = -10):
+    def apply_combat_damage(self, victim_ids: List[str], damage: int = None):
         """
         Apply combat damage to victims (vectorized).
 
         Args:
             victim_ids: List of victim agent IDs
-            damage: Damage amount (negative)
+            damage: Damage amount (negative, defaults to config value)
         """
+        if damage is None:
+            damage = -self.game_mechanics["energy"]["combat_victim_loss"]
+
         for victim_id in victim_ids:
             try:
                 victim_idx = self.agent_ids.index(victim_id)
@@ -520,8 +535,9 @@ class VectorizedEnvironment:
                 continue
 
     def apply_metabolism(self):
-        """Apply -2 energy to all alive agents (vectorized)."""
-        self.agent_energies[self.agent_alive] -= 2
+        """Apply metabolism cost to all alive agents (vectorized, from config)."""
+        metabolism_cost = self.game_mechanics["energy"]["metabolism_cost"]
+        self.agent_energies[self.agent_alive] -= metabolism_cost
 
     def update_alive_status(self) -> List[str]:
         """

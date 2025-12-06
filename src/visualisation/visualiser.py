@@ -35,6 +35,11 @@ class Visualiser:
         else:
             self.grid_size = grid_size
 
+        # Load game mechanics config
+        config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "game_mechanics.json")
+        with open(config_path, 'r') as f:
+            self.game_mechanics = json.load(f)
+
     def _convert_to_numeric_grid(self, symbolic_grid):
         """
         Converts a symbolic grid (with 'F', 'W', '.', etc.) to a numeric grid for visualization.
@@ -623,8 +628,14 @@ class Visualiser:
             actions = []
             events = []  # 'FOOD', 'ATTACK', 'VICTIM', 'MOVE', 'START'
 
-            # Initial energy (hardcoded as 100 for now)
-            current_energy = 100.0
+            # Get game mechanics from config
+            initial_energy = self.game_mechanics["energy"]["initial"]
+            metabolism_cost = self.game_mechanics["energy"]["metabolism_cost"]
+            food_reward = self.game_mechanics["energy"]["food_reward"]
+            combat_attacker_gain = self.game_mechanics["energy"]["combat_attacker_gain"]
+            combat_victim_loss = self.game_mechanics["energy"]["combat_victim_loss"]
+
+            current_energy = float(initial_energy)
 
             for turn_idx, (action, pos) in enumerate(path):
                 turns.append(turn_idx)
@@ -638,35 +649,37 @@ class Visualiser:
                 elif action == "FOOD_COLLECTED":
                     events.append("FOOD")
                     actions.append("FOOD")
-                    current_energy += 30  # Food reward
-                    current_energy -= 2   # Metabolism cost
+                    current_energy += food_reward        # Food reward
+                    current_energy -= metabolism_cost    # Metabolism cost
                     energies.append(current_energy)
 
                 elif action == "COMBAT_ATTACK":
                     events.append("ATTACK")
                     actions.append("ATTACK")
-                    current_energy -= 2  # Metabolism cost only (attacker doesn't lose energy)
+                    current_energy += combat_attacker_gain  # Energy stolen from victim
+                    current_energy -= metabolism_cost       # Metabolism cost
                     energies.append(current_energy)
 
                 elif action == "COMBAT_VICTIM":
                     events.append("VICTIM")
                     actions.append("VICTIM")
-                    current_energy -= 20  # Combat damage
-                    current_energy -= 2   # Metabolism cost
+                    current_energy -= combat_victim_loss  # Combat damage
+                    current_energy -= metabolism_cost     # Metabolism cost
                     energies.append(current_energy)
 
                 elif action == "COMBAT":
                     # Legacy support for old format (assume attacker)
                     events.append("ATTACK")
                     actions.append("ATTACK")
-                    current_energy -= 2   # Metabolism cost
+                    current_energy += combat_attacker_gain  # Energy stolen
+                    current_energy -= metabolism_cost       # Metabolism cost
                     energies.append(current_energy)
 
                 else:
                     # Regular move action
                     events.append("MOVE")
                     actions.append(action)
-                    current_energy -= 2  # Metabolism cost only
+                    current_energy -= metabolism_cost  # Metabolism cost only
                     energies.append(current_energy)
 
             # Plot energy timeline
@@ -741,21 +754,44 @@ def main():
 
     visualiser = Visualiser(data_path)
 
-    # Animate the top champion of the first generation as a test
-    print("Visualising top champion path for generation 0...")
-    visualiser.animate_champion_path(generation=0, champion_rank=0)
+    # Determine the latest generation
+    champion_paths = visualiser.data.get("champion_paths_by_gen", {})
+    if not champion_paths:
+        print("Error: No generation data found in simulation results")
+        return
 
-    # Plot the performance metrics
-    print("\nPlotting performance metrics...")
-    visualiser.plot_performance_metrics()
+    latest_gen = max(int(gen) for gen in champion_paths.keys())
+    print(f"Found {len(champion_paths)} generation(s), visualizing latest generation: {latest_gen}")
+    print()
 
-    # Plot the genetic diversity
-    print("\nPlotting genetic diversity...")
-    visualiser.plot_genetic_diversity()
+    # Generate heatmap for latest generation
+    print(f"Generating agent heatmap for generation {latest_gen}...")
+    visualiser.plot_agent_heatmap(generation=latest_gen, save_as_png=True)
 
-    # Plot the behavioural metrics
-    print("\nPlotting behavioural metrics...")
-    visualiser.plot_behavioural_metrics()
+    # Generate action timeline for top 3 agents
+    print(f"\nGenerating action timeline for top 3 agents...")
+    visualiser.plot_champion_action_timeline(generation=latest_gen, n=3, save_as_png=True)
+
+    # Animate the top 3 champion paths
+    print(f"\nVisualising top 3 champion paths for generation {latest_gen}...")
+    visualiser.animate_top_n_champion_paths(generation=latest_gen, n=3, save_as_gif=True)
+
+    # Plot the genetic diversity (if multiple generations)
+    if len(champion_paths) > 1:
+        print("\nPlotting genetic diversity...")
+        visualiser.plot_genetic_diversity(save_as_png=True)
+
+        # Plot the behavioural metrics
+        print("Plotting behavioural metrics...")
+        visualiser.plot_behavioural_metrics(save_as_png=True)
+
+    print("\n✓ All visualizations generated successfully!")
+    print(f"  - Heatmap: ./output/agent_heatmap_gen_{latest_gen}.png")
+    print(f"  - Timeline: ./output/action_timeline_gen_{latest_gen}_top_3*.png")
+    print(f"  - Animation: ./output/gifs/champion_paths_gen_{latest_gen}_top_3*.gif")
+    if len(champion_paths) > 1:
+        print("  - Genetic diversity: ./output/genetic_diversity.png")
+        print("  - Behavioral metrics: ./output/behavioural_metrics.png")
 
 
 if __name__ == "__main__":

@@ -104,26 +104,26 @@ def main(
         if gen < num_generations - 1:
             sim.evolve_population()
 
-    # Run champion tournament (if multiple generations)
-    if num_generations > 1:
-        sim.run_champion_tournament()
-
-    # Save final population weights
+    # Save final generation's top 3 weights (before tournament)
     print(f"\n{'='*60}")
-    print("SAVING FINAL CHAMPION WEIGHTS")
+    print("SAVING FINAL GENERATION WEIGHTS")
     print(f"{'='*60}")
 
     sim.save_final_weights()
 
-    # Show final champions
+    # Show final generation's top champions
     top_champions = sim.get_top_agents(3)
     for i, champion in enumerate(top_champions, 1):
-        print(f"\nChampion {i} (Agent {champion.id}):")
+        print(f"\nFinal Generation Champion {i} (Agent {champion.id}):")
         print(f"  Energy: {champion.energy:.1f} ({champion.fitness_percentage:.1f}%)")
         print(f"  Food collected: {champion.food_collected}")
         print(f"  Attacks made: {champion.combat_attacks}")
         print(f"  Attacked (victim): {champion.combat_victims}")
         print(f"  Status: {'✓ ALIVE' if champion.is_alive else '✗ DEAD'}")
+
+    # Run champion tournament (if multiple generations)
+    if num_generations > 1:
+        sim.run_champion_tournament()
 
     print(f"\nVisualization data saved to: ./output/simulation_paths.json")
     print(f"Weights saved to: ./output/weights/")
