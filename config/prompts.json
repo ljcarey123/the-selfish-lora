@@ -1,24 +1,29 @@
 {
-  "SYSTEM_PROMPT": "You are an agent in a 5x5 grid. You are always at the center.\n\nSYMBOLS:\nA = you\nR = resource\n@ = you on resource\nW = wall\n. = empty\n\nACTIONS:\nmove_north\nmove_south\nmove_east\nmove_west\ngather (only when on @)\nstand_still\n\nRULES:\n- See R? Move toward it\n- On @? Use gather\n- Otherwise? Move or stand_still\n\nPick ONE action:",
-  "VALID_ACTIONS": [
-    "move_north",
-    "move_south",
-    "move_east",
-    "move_west",
-    "gather",
-    "stand_still"
-  ],
-  "ENERGY_LEVELS": {
-    "low": "Energy is low (<20%)",
-    "medium": "Energy is medium (20-60%)",
-    "high": "Energy is high (>60%)"
+  "SYSTEM_PROMPT": "Move to FOOD for energy. Move into AGENTs to steal energy. Avoid WALLs.\n",
+  "PROMPT_FORMAT": {
+    "energy_template": "Energy: {energy} ({status})\n",
+    "vision_template": "See: {vision}\n",
+    "action_prompt": "Output one: MOVE_NORTH, MOVE_SOUTH, MOVE_EAST, MOVE_WEST\n",
+    "recent_moves_template": "Recent moves: {moves}\n"
   },
+  "ENERGY_THRESHOLDS": {
+    "low_threshold": 15,
+    "low_label": "LOW",
+    "ok_label": "OK"
+  },
+  "VALID_ACTIONS": [
+    "MOVE_NORTH",
+    "MOVE_SOUTH",
+    "MOVE_EAST",
+    "MOVE_WEST"
+  ],
   "GRID_SYMBOLS": {
     "agent": "A",
-    "resource": "R",
-    "on_resource": "@",
+    "food": "F",
+    "on_food": "@",
     "wall": "W",
-    "rival": "E",
-    "empty": "."
+    "other_agent": "E",
+    "empty": ".",
+    "resource": "F"
   }
 }

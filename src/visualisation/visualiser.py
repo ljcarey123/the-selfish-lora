@@ -10,7 +10,7 @@ class Visualiser:
     Handles the visualisation of the simulation results.
     """
 
-    def __init__(self, data_path=None, data=None, grid_size=50):
+    def __init__(self, data_path=None, data=None, grid_size=None):
         """
         Initialises the Visualiser.
 
@@ -19,10 +19,8 @@ class Visualiser:
         Args:
             data_path (str, optional): Path to the simulation data JSON file.
             data (dict, optional): A dictionary containing simulation data.
-            grid_size (int): The size of the simulation grid.
+            grid_size (int, optional): The size of the simulation grid. If not provided, will be read from data.
         """
-        self.grid_size = grid_size
-
         if data_path:
             with open(data_path, "r") as f:
                 self.data = json.load(f)
@@ -31,19 +29,26 @@ class Visualiser:
         else:
             raise ValueError("Visualiser must be initialised with either 'data_path' or 'data'.")
 
+        # Get grid size from data if not explicitly provided
+        if grid_size is None:
+            self.grid_size = self.data.get('grid_size', 50)  # Default to 50 for backwards compatibility
+        else:
+            self.grid_size = grid_size
+
     def _convert_to_numeric_grid(self, symbolic_grid):
         """
-        Converts a symbolic grid (with 'R', '.', etc.) to a numeric grid for visualization.
+        Converts a symbolic grid (with 'F', 'W', '.', etc.) to a numeric grid for visualization.
 
         Args:
             symbolic_grid: numpy array with string symbols
 
         Returns:
-            numpy array with numeric values (1 for resource, 0 for empty)
+            numpy array with numeric values (1 for food, 0 for empty)
         """
         numeric_grid = np.zeros(symbolic_grid.shape)
-        # Mark resources as 1, everything else as 0
-        numeric_grid[symbolic_grid == 'R'] = 1
+        # Mark food as 1, everything else as 0
+        numeric_grid[symbolic_grid == 'F'] = 1
+        numeric_grid[symbolic_grid == 'R'] = 1  # Support old format too
         return numeric_grid
 
     def animate_top_n_champion_paths(
@@ -51,7 +56,7 @@ class Visualiser:
     ):
         """
         Creates an animation of the top n champions' paths for a given generation.
-        In tournament mode, creates separate animations for each tournament.
+        In tournament mode (multiple rounds), creates separate animations for each round.
 
         Args:
             generation (int): The generation number to animate.
@@ -59,34 +64,55 @@ class Visualiser:
             save_as_gif (bool): If True, saves the animation as a GIF.
         """
         is_tournament_mode = self.data.get('tournament_mode', False)
-        tournament_history = self.data.get('tournament_history', {})
+        gen_str = str(generation)
 
-        # Check if we have tournament-specific data for this generation
-        if is_tournament_mode and str(generation) in tournament_history:
-            # Tournament mode: create separate animation for each tournament
-            tournaments = tournament_history[str(generation)]
-            print(f"Tournament mode detected: creating {len(tournaments)} separate animations")
+        # Get paths for this generation
+        gen_data = self.data["champion_paths_by_gen"].get(gen_str)
+        if gen_data is None:
+            print(f"Error: No champion paths found for generation {generation}.")
+            return
 
-            for tournament_idx, tournament_data in enumerate(tournaments):
-                self._animate_single_tournament(
-                    generation, tournament_idx, tournament_data, n, save_as_gif
+        # Check if this is tournament mode (dict of rounds) or standard mode (list of paths)
+        if is_tournament_mode and isinstance(gen_data, dict):
+            # Tournament mode: gen_data is {round_idx: [paths]}
+            rounds = sorted(gen_data.keys(), key=int)
+            print(f"Tournament mode detected: creating {len(rounds)} separate animations (one per round)")
+
+            for round_idx in rounds:
+                round_paths = gen_data[round_idx]
+
+                # Get environment for this round
+                env_data = self.data["environment_history"][gen_str][round_idx]
+                resource_grid = np.array(env_data)
+
+                if len(round_paths) < n:
+                    print(f"Warning: Only {len(round_paths)} champion paths for generation {generation} round {round_idx}, showing all.")
+                    n_paths = len(round_paths)
+                else:
+                    n_paths = n
+
+                self._create_path_animation(
+                    round_paths[:n_paths], resource_grid, generation, n_paths, save_as_gif,
+                    title_suffix=f" - Round {int(round_idx) + 1}",
+                    filename_suffix=f"_round_{int(round_idx) + 1}"
                 )
         else:
-            # Standard mode: single animation using champion_paths_by_gen
-            paths = self.data["champion_paths_by_gen"].get(str(generation))
-            if paths is None:
+            # Standard mode: gen_data is [paths] directly
+            paths = gen_data if isinstance(gen_data, list) else []
+            if not paths:
                 print(f"Error: No champion paths found for generation {generation}.")
                 return
+
             if len(paths) < n:
                 print(f"Warning: Only {len(paths)} champion paths for generation {generation}, showing all.")
                 n = len(paths)
 
-            # Load environment
-            history_key = "initial_environment_history"
-            if history_key not in self.data:
-                print(f"Warning: '{history_key}' not found. Falling back to 'environment_history'.")
-                history_key = "environment_history"
-            resource_grid = np.array(self.data[history_key][str(generation)])
+            # Get environment (handle both old and new formats)
+            env_data = self.data["environment_history"].get(gen_str)
+            if isinstance(env_data, dict):
+                # Tournament format but only 1 round - get round 0
+                env_data = env_data.get("0", env_data)
+            resource_grid = np.array(env_data)
 
             # Create the animation
             self._create_path_animation(
@@ -94,21 +120,6 @@ class Visualiser:
                 title_suffix=""
             )
 
-    def _animate_single_tournament(self, generation, tournament_idx, tournament_data, n, save_as_gif):
-        """Helper method to animate a single tournament."""
-        champion_paths = tournament_data.get('champion_paths', [])
-        if not champion_paths:
-            print(f"No champion paths for tournament {tournament_idx + 1}")
-            return
-
-        n_paths = min(n, len(champion_paths))
-        resource_grid = np.array(tournament_data['environment'])
-
-        self._create_path_animation(
-            champion_paths[:n_paths], resource_grid, generation, n_paths, save_as_gif,
-            title_suffix=f" - Tournament {tournament_idx + 1}",
-            filename_suffix=f"_tournament_{tournament_idx + 1}"
-        )
 
     def _create_path_animation(self, paths, resource_grid, generation, n, save_as_gif,
                                title_suffix="", filename_suffix=""):
@@ -130,12 +141,14 @@ class Visualiser:
             agent_markers.append(agent_marker)
             path_lines.append(path_line)
         
-        # Add gather markers (shared across all agents)
-        (success_markers,) = ax.plot([], [], 'g*', markersize=12, label="Gather Success", linestyle='None')
-        (fail_markers,) = ax.plot([], [], 'rx', markersize=10, label="Gather Fail", linestyle='None')
+        # Add event markers (shared across all agents)
+        (food_markers,) = ax.plot([], [], 'g*', markersize=12, label="Food Collected", linestyle='None')
+        (attack_markers,) = ax.plot([], [], 'r^', markersize=10, label="Attack (aggressor)", linestyle='None')
+        (victim_markers,) = ax.plot([], [], 'mv', markersize=10, label="Attacked (victim)", linestyle='None')
         (unparseable_markers,) = ax.plot([], [], 'o', color='orange', markersize=8, label="Unparseable", linestyle='None', alpha=0.7)
-        successful_gather_coords = set()
-        unsuccessful_gather_coords = set()
+        food_coords = set()
+        attack_coords = set()
+        victim_coords = set()
         unparseable_coords = set()
 
         ax.legend()
@@ -147,10 +160,11 @@ class Visualiser:
             for i in range(n):
                 agent_markers[i].set_data([], [])
                 path_lines[i].set_data([], [])
-            success_markers.set_data([], [])
-            fail_markers.set_data([], [])
+            food_markers.set_data([], [])
+            attack_markers.set_data([], [])
+            victim_markers.set_data([], [])
             unparseable_markers.set_data([], [])
-            return agent_markers + path_lines + [success_markers, fail_markers, unparseable_markers]
+            return agent_markers + path_lines + [food_markers, attack_markers, victim_markers, unparseable_markers]
 
         def update(frame):
             for i in range(n):
@@ -159,12 +173,17 @@ class Visualiser:
                     action, pos = path[frame]
                     x, y = pos
                     agent_markers[i].set_data([y], [x])
-                    
+
                     # Check for special actions
-                    if action == "GATHER_SUCCESS":
-                        successful_gather_coords.add(tuple(pos))
-                    elif action == "GATHER_FAIL":
-                        unsuccessful_gather_coords.add(tuple(pos))
+                    if action == "FOOD_COLLECTED" or action == "GATHER_SUCCESS":
+                        food_coords.add(tuple(pos))
+                    elif action == "COMBAT_ATTACK":
+                        attack_coords.add(tuple(pos))
+                    elif action == "COMBAT_VICTIM":
+                        victim_coords.add(tuple(pos))
+                    elif action == "COMBAT" or action == "GATHER_FAIL":
+                        # Legacy support for old format
+                        attack_coords.add(tuple(pos))
                     elif action == "UNPARSEABLE":
                         unparseable_coords.add(tuple(pos))
 
@@ -173,19 +192,22 @@ class Visualiser:
                     path_y_coords = [p[0] for p in path_positions]
                     path_x_coords = [p[1] for p in path_positions]
                     path_lines[i].set_data(path_x_coords, path_y_coords)
-            
-            # Update gather markers
-            if successful_gather_coords:
-                success_y, success_x = zip(*successful_gather_coords)
-                success_markers.set_data(success_x, success_y)
-            if unsuccessful_gather_coords:
-                fail_y, fail_x = zip(*unsuccessful_gather_coords)
-                fail_markers.set_data(fail_x, fail_y)
+
+            # Update event markers
+            if food_coords:
+                food_y, food_x = zip(*food_coords)
+                food_markers.set_data(food_x, food_y)
+            if attack_coords:
+                attack_y, attack_x = zip(*attack_coords)
+                attack_markers.set_data(attack_x, attack_y)
+            if victim_coords:
+                victim_y, victim_x = zip(*victim_coords)
+                victim_markers.set_data(victim_x, victim_y)
             if unparseable_coords:
                 unparseable_y, unparseable_x = zip(*unparseable_coords)
                 unparseable_markers.set_data(unparseable_x, unparseable_y)
-            
-            return agent_markers + path_lines + [success_markers, fail_markers, unparseable_markers]
+
+            return agent_markers + path_lines + [food_markers, attack_markers, victim_markers, unparseable_markers]
 
         ani = animation.FuncAnimation(
             fig, update, frames=max_frames, init_func=init, blit=True, interval=150
@@ -244,26 +266,26 @@ class Visualiser:
         # Initialize plot elements
         (agent_marker,) = ax.plot([], [], "bo", markersize=10, label="Agent")
         (path_line,) = ax.plot([], [], "b-", alpha=0.5, label="Path")
-        (success_markers,) = ax.plot(
-            [], [], "gx", markersize=8, label="Gather Success", linestyle='None'
+        (food_markers,) = ax.plot(
+            [], [], "g*", markersize=12, label="Food Collected", linestyle='None'
         )
-        (fail_markers,) = ax.plot(
-            [], [], "rx", markersize=8, label="Gather Fail", linestyle='None'
+        (combat_markers,) = ax.plot(
+            [], [], "rx", markersize=10, label="Combat", linestyle='None'
         )
         (unparseable_markers,) = ax.plot(
             [], [], "o", color='orange', markersize=6, label="Unparseable", linestyle='None', alpha=0.7
         )
-        successful_gather_coords = set()
-        unsuccessful_gather_coords = set()
+        food_coords = set()
+        combat_coords = set()
         unparseable_coords = set()
 
         def init():
             agent_marker.set_data([], [])
             path_line.set_data([], [])
-            success_markers.set_data([], [])
-            fail_markers.set_data([], [])
+            food_markers.set_data([], [])
+            combat_markers.set_data([], [])
             unparseable_markers.set_data([], [])
-            return agent_marker, path_line, success_markers, fail_markers, unparseable_markers
+            return agent_marker, path_line, food_markers, combat_markers, unparseable_markers
 
         def update(frame):
             action, pos = path[frame]
@@ -271,23 +293,23 @@ class Visualiser:
             agent_marker.set_data([y], [x])
 
             # Check for special actions
-            if action == "GATHER_SUCCESS":
-                successful_gather_coords.add(tuple(pos))
-            elif action == "GATHER_FAIL":
-                unsuccessful_gather_coords.add(tuple(pos))
+            if action == "FOOD_COLLECTED" or action == "GATHER_SUCCESS":
+                food_coords.add(tuple(pos))
+            elif action == "COMBAT" or action == "GATHER_FAIL":
+                combat_coords.add(tuple(pos))
             elif action == "UNPARSEABLE":
                 unparseable_coords.add(tuple(pos))
 
-            # Update success markers
-            if successful_gather_coords:
-                success_y, success_x = zip(*successful_gather_coords)
-                success_markers.set_data(success_x, success_y)
+            # Update food markers
+            if food_coords:
+                food_y, food_x = zip(*food_coords)
+                food_markers.set_data(food_x, food_y)
 
-            # Update fail markers
-            if unsuccessful_gather_coords:
-                fail_y, fail_x = zip(*unsuccessful_gather_coords)
-                fail_markers.set_data(fail_x, fail_y)
-            
+            # Update combat markers
+            if combat_coords:
+                combat_y, combat_x = zip(*combat_coords)
+                combat_markers.set_data(combat_x, combat_y)
+
             # Update unparseable markers
             if unparseable_coords:
                 unparseable_y, unparseable_x = zip(*unparseable_coords)
@@ -299,7 +321,7 @@ class Visualiser:
             path_x_coords = [p[1] for p in path_positions]
             path_line.set_data(path_x_coords, path_y_coords)
 
-            return agent_marker, path_line, success_markers, fail_markers, unparseable_markers
+            return agent_marker, path_line, food_markers, combat_markers, unparseable_markers
 
         ani = animation.FuncAnimation(
             fig,
@@ -408,7 +430,7 @@ class Visualiser:
     def plot_agent_heatmap(self, generation, save_as_png=True):
         """
         Creates a heatmap showing where agents spent time during a generation.
-        In tournament mode, creates subplots for each tournament side-by-side.
+        In tournament mode (multiple rounds), creates subplots for each round side-by-side.
 
         Args:
             generation (int): The generation to visualise.
@@ -416,47 +438,54 @@ class Visualiser:
         """
         generation_str = str(generation)
         is_tournament_mode = self.data.get('tournament_mode', False)
-        tournament_history = self.data.get('tournament_history', {})
 
-        # Check if we have tournament-specific data for this generation
-        if is_tournament_mode and generation_str in tournament_history:
-            # Tournament mode: create subplots for each tournament
-            tournaments = tournament_history[generation_str]
-            n_tournaments = len(tournaments)
+        # Get generation data
+        gen_paths = self.data['champion_paths_by_gen'].get(generation_str)
+        gen_env = self.data['environment_history'].get(generation_str)
 
-            # Create subplots (1 row, n_tournaments columns)
-            fig, axes = plt.subplots(1, n_tournaments, figsize=(8 * n_tournaments, 8))
-            if n_tournaments == 1:
+        if gen_paths is None or gen_env is None:
+            print(f"No data found for generation {generation}")
+            return
+
+        # Check if this is tournament mode (dict of rounds) or standard mode (list of paths)
+        if is_tournament_mode and isinstance(gen_paths, dict):
+            # Tournament mode: create subplots for each round
+            rounds = sorted(gen_paths.keys(), key=int)
+            n_rounds = len(rounds)
+
+            # Create subplots (1 row, n_rounds columns)
+            fig, axes = plt.subplots(1, n_rounds, figsize=(8 * n_rounds, 8))
+            if n_rounds == 1:
                 axes = [axes]  # Make it iterable
 
-            print(f"Creating heatmap with {n_tournaments} tournament subplots")
+            print(f"Creating heatmap with {n_rounds} round subplots")
 
-            for tournament_idx, (ax, tournament_data) in enumerate(zip(axes, tournaments)):
-                # Get paths from all_agent_paths for this tournament
-                all_paths = list(tournament_data.get('all_agent_paths', {}).values())
-                resource_grid = np.array(tournament_data['environment'])
+            for round_idx_str, ax in zip(rounds, axes):
+                # Get paths for this round (top 5 champions)
+                round_paths = gen_paths[round_idx_str]
+                resource_grid = np.array(gen_env[round_idx_str])
 
-                # Create heatmap for this tournament
+                # Create heatmap for this round
                 heatmap = np.zeros((self.grid_size, self.grid_size))
-                for path in all_paths:
+                for path in round_paths:
                     for action, pos in path:
                         if action != "START":
-                            x, y = pos
-                            if 0 <= x < self.grid_size and 0 <= y < self.grid_size:
-                                heatmap[x, y] += 1
+                            row, col = pos
+                            if 0 <= row < self.grid_size and 0 <= col < self.grid_size:
+                                heatmap[row, col] += 1
 
                 # Plot the heatmap
                 im = ax.imshow(heatmap, cmap='YlOrRd', alpha=0.8)
 
                 # Overlay resource locations (convert symbolic grid to mask)
-                resource_mask = (resource_grid == 'R')
+                resource_mask = ((resource_grid == 'R') | (resource_grid == 'F'))
                 ax.contour(resource_mask, colors='green', linewidths=2, levels=[0.5])
 
                 # Add colorbar
                 cbar = plt.colorbar(im, ax=ax)
                 cbar.set_label('Visits', rotation=270, labelpad=15, fontsize=9)
 
-                ax.set_title(f'Tournament {tournament_idx + 1}', fontsize=12)
+                ax.set_title(f'Round {int(round_idx_str) + 1}', fontsize=12)
                 ax.set_xlabel('Y Position')
                 ax.set_ylabel('X Position')
 
@@ -466,9 +495,8 @@ class Visualiser:
 
         else:
             # Standard mode: single heatmap
-            if 'champion_paths_by_gen' in self.data and generation_str in self.data['champion_paths_by_gen']:
-                paths = self.data['champion_paths_by_gen'][generation_str]
-            else:
+            paths = gen_paths if isinstance(gen_paths, list) else []
+            if not paths:
                 print(f"No path data found for generation {generation}")
                 return
 
@@ -479,19 +507,17 @@ class Visualiser:
             for path in paths:
                 for action, pos in path:
                     if action != "START":
-                        x, y = pos
-                        if 0 <= x < self.grid_size and 0 <= y < self.grid_size:
-                            heatmap[x, y] += 1
+                        row, col = pos
+                        if 0 <= row < self.grid_size and 0 <= col < self.grid_size:
+                            heatmap[row, col] += 1
 
             # Get the environment to show resources
-            history_key = "initial_environment_history"
-            if history_key not in self.data:
-                history_key = "environment_history"
+            env_data = gen_env
+            if isinstance(env_data, dict):
+                # Tournament format but only 1 round - get round 0
+                env_data = env_data.get("0", next(iter(env_data.values())))
 
-            if generation_str in self.data.get(history_key, {}):
-                resource_grid = np.array(self.data[history_key][generation_str])
-            else:
-                resource_grid = None
+            resource_grid = np.array(env_data) if env_data is not None else None
 
             # Create the plot
             fig, ax = plt.subplots(figsize=(12, 10))
@@ -501,7 +527,7 @@ class Visualiser:
 
             # Overlay resource locations if available (symbolic grid)
             if resource_grid is not None:
-                resource_mask = (resource_grid == 'R')
+                resource_mask = ((resource_grid == 'R') | (resource_grid == 'F'))
                 ax.contour(resource_mask, colors='green', linewidths=2, levels=[0.5])
 
             # Add colorbar
@@ -519,6 +545,183 @@ class Visualiser:
             png_path = os.path.join(output_dir, f'agent_heatmap_gen_{generation}.png')
             plt.savefig(png_path, dpi=150, bbox_inches='tight')
             print(f'Agent heatmap saved to {png_path}')
+            plt.close()
+        else:
+            plt.show()
+
+    def plot_champion_action_timeline(self, generation, n=3, save_as_png=True):
+        """
+        Plot detailed move-by-move timeline for champion agents showing:
+        - Action taken
+        - Whether attacked
+        - Running fitness (energy)
+
+        Args:
+            generation: Which generation to visualize
+            n: Number of top agents to show (default 3)
+            save_as_png: Whether to save as PNG file
+        """
+        gen_str = str(generation)
+        is_tournament_mode = self.data.get('tournament_mode', False)
+
+        # Get champion paths
+        if gen_str not in self.data["champion_paths_by_gen"]:
+            print(f"No data found for generation {generation}")
+            return
+
+        gen_paths = self.data["champion_paths_by_gen"][gen_str]
+
+        # Handle tournament vs standard format
+        if is_tournament_mode and isinstance(gen_paths, dict):
+            # Tournament mode: create timeline for each round
+            rounds = sorted(gen_paths.keys(), key=int)
+
+            for round_idx_str in rounds:
+                round_paths = gen_paths[round_idx_str][:n]
+                self._create_action_timeline(
+                    round_paths, generation,
+                    title_suffix=f" - Round {int(round_idx_str) + 1}",
+                    filename_suffix=f"_round_{int(round_idx_str) + 1}",
+                    save_as_png=save_as_png
+                )
+        else:
+            # Standard mode: single timeline
+            paths = gen_paths if isinstance(gen_paths, list) else []
+            paths = paths[:n]
+            self._create_action_timeline(paths, generation, save_as_png=save_as_png)
+
+    def _create_action_timeline(self, paths, generation, title_suffix="", filename_suffix="", save_as_png=True):
+        """
+        Create the actual action timeline plot.
+
+        Args:
+            paths: List of agent paths to visualize
+            generation: Generation number
+            title_suffix: Optional suffix for the title
+            filename_suffix: Optional suffix for the filename
+            save_as_png: Whether to save as PNG
+        """
+        if not paths:
+            print(f"No paths to visualize")
+            return
+
+        n_agents = len(paths)
+
+        # Create figure with subplots - one per agent
+        fig, axes = plt.subplots(n_agents, 1, figsize=(14, 4 * n_agents))
+        if n_agents == 1:
+            axes = [axes]
+
+        # Process each agent
+        for agent_idx, (path, ax) in enumerate(zip(paths, axes)):
+            if not path:
+                continue
+
+            # Extract timeline data
+            turns = []
+            energies = []
+            actions = []
+            events = []  # 'FOOD', 'ATTACK', 'VICTIM', 'MOVE', 'START'
+
+            # Initial energy (hardcoded as 100 for now)
+            current_energy = 100.0
+
+            for turn_idx, (action, pos) in enumerate(path):
+                turns.append(turn_idx)
+
+                # Categorize action and calculate energy change
+                if action == "START":
+                    events.append("START")
+                    actions.append("START")
+                    energies.append(current_energy)
+
+                elif action == "FOOD_COLLECTED":
+                    events.append("FOOD")
+                    actions.append("FOOD")
+                    current_energy += 30  # Food reward
+                    current_energy -= 2   # Metabolism cost
+                    energies.append(current_energy)
+
+                elif action == "COMBAT_ATTACK":
+                    events.append("ATTACK")
+                    actions.append("ATTACK")
+                    current_energy -= 2  # Metabolism cost only (attacker doesn't lose energy)
+                    energies.append(current_energy)
+
+                elif action == "COMBAT_VICTIM":
+                    events.append("VICTIM")
+                    actions.append("VICTIM")
+                    current_energy -= 20  # Combat damage
+                    current_energy -= 2   # Metabolism cost
+                    energies.append(current_energy)
+
+                elif action == "COMBAT":
+                    # Legacy support for old format (assume attacker)
+                    events.append("ATTACK")
+                    actions.append("ATTACK")
+                    current_energy -= 2   # Metabolism cost
+                    energies.append(current_energy)
+
+                else:
+                    # Regular move action
+                    events.append("MOVE")
+                    actions.append(action)
+                    current_energy -= 2  # Metabolism cost only
+                    energies.append(current_energy)
+
+            # Plot energy timeline
+            ax.plot(turns, energies, 'b-', linewidth=2, label='Energy')
+            ax.axhline(y=0, color='r', linestyle='--', alpha=0.5, label='Death Threshold')
+
+            # Mark special events
+            food_turns = [t for t, e in zip(turns, events) if e == "FOOD"]
+            food_energies = [energies[t] for t in food_turns]
+            attack_turns = [t for t, e in zip(turns, events) if e == "ATTACK"]
+            attack_energies = [energies[t] for t in attack_turns]
+            victim_turns = [t for t, e in zip(turns, events) if e == "VICTIM"]
+            victim_energies = [energies[t] for t in victim_turns]
+
+            if food_turns:
+                ax.scatter(food_turns, food_energies, color='green', s=100, marker='o',
+                          label='Food Collected (+30)', zorder=5, edgecolor='darkgreen', linewidth=2)
+            if attack_turns:
+                ax.scatter(attack_turns, attack_energies, color='red', s=100, marker='^',
+                          label='Attack (aggressor)', zorder=5, edgecolor='darkred', linewidth=2)
+            if victim_turns:
+                ax.scatter(victim_turns, victim_energies, color='magenta', s=100, marker='v',
+                          label='Attacked (-20 victim)', zorder=5, edgecolor='darkmagenta', linewidth=2)
+
+            # Styling
+            ax.set_xlabel('Turn', fontsize=11)
+            ax.set_ylabel('Energy', fontsize=11)
+            ax.set_title(f'Agent #{agent_idx + 1} - Action Timeline', fontsize=12, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc='upper right', fontsize=9)
+
+            # Add summary statistics in text box
+            total_food = len(food_turns)
+            total_attacks = len(attack_turns)
+            total_attacked = len(victim_turns)
+            final_energy = energies[-1] if energies else 0
+            status = "ALIVE" if final_energy > 0 else "DEAD"
+
+            summary_text = f'Food: {total_food} | Attacks: {total_attacks} | Attacked: {total_attacked} | Final Energy: {final_energy:.1f} | Status: {status}'
+            ax.text(0.02, 0.98, summary_text, transform=ax.transAxes,
+                   fontsize=10, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+        # Overall title
+        fig.suptitle(f'Champion Agent Timelines - Generation {generation}{title_suffix}',
+                    fontsize=14, fontweight='bold', y=0.995)
+        plt.tight_layout(rect=[0, 0, 1, 0.99])
+
+        if save_as_png:
+            output_dir = 'output'
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            png_path = os.path.join(output_dir, f'action_timeline_gen_{generation}_top_{n_agents}{filename_suffix}.png')
+            plt.savefig(png_path, dpi=150, bbox_inches='tight')
+            print(f'Action timeline saved to {png_path}')
             plt.close()
         else:
             plt.show()
