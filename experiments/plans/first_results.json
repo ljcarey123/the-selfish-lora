@@ -1,0 +1,18 @@
+{"runs": [
+  {"experiment": "prisoners_dilemma", "name": "panel_evolved_s0",
+   "args": ["--no-self-play", "--bots", "tft,grudger,alld", "--population", "16", "--generations", "20", "--rounds", "6", "--seed", "0"]},
+  {"experiment": "prisoners_dilemma", "name": "panel_control_s0",
+   "args": ["--no-self-play", "--bots", "tft,grudger,alld", "--population", "16", "--generations", "20", "--rounds", "6", "--seed", "0", "--control"]},
+  {"experiment": "prisoners_dilemma", "name": "panel_evolved_s1",
+   "args": ["--no-self-play", "--bots", "tft,grudger,alld", "--population", "16", "--generations", "20", "--rounds", "6", "--seed", "1"]},
+  {"experiment": "prisoners_dilemma", "name": "panel_control_s1",
+   "args": ["--no-self-play", "--bots", "tft,grudger,alld", "--population", "16", "--generations", "20", "--rounds", "6", "--seed", "1", "--control"]},
+  {"experiment": "countdown", "name": "evolved_s0",
+   "args": ["--population", "12", "--generations", "15", "--puzzles-per-gen", "24", "--seed", "0"]},
+  {"experiment": "countdown", "name": "control_s0",
+   "args": ["--population", "12", "--generations", "15", "--puzzles-per-gen", "24", "--seed", "0", "--control"]},
+  {"experiment": "prisoners_dilemma", "name": "social_evolved_s0",
+   "args": ["--bots", "tft,alld", "--population", "12", "--generations", "15", "--rounds", "6", "--seed", "0"]},
+  {"experiment": "prisoners_dilemma", "name": "social_control_s0",
+   "args": ["--bots", "tft,alld", "--population", "12", "--generations", "15", "--rounds", "6", "--seed", "0", "--control"]}
+]}

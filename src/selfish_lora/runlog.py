@@ -87,42 +87,64 @@ def load_history(run_dir: str) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def plot_runs(run_dirs: list[str], labels: list[str], out_path: str, title: str = "Fitness by generation"):
-    """
-    Plot best (solid) and mean (dashed) fitness per generation for each run.
+LINE_STYLES = ["-", "--", ":"]
 
-    One colour per run, so evolved vs control reads at a glance.
+
+def plot_runs(run_dirs: list[str], labels: list[str], out_path: str, title: str = "Fitness by generation",
+              metrics: tuple = ("best", "mean"), ylabel: str = "Fitness", panels: bool = False):
+    """
+    Plot history metrics per generation for each run.
+
+    Colour identifies the label (runs sharing a label, e.g. several seeds of
+    "evolved", share a colour). With panels=False, up to three metrics that
+    share a unit go on one axis, told apart by line style. With panels=True,
+    each metric gets its own panel and y-axis.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.ticker import MaxNLocator
 
-    fig, ax = plt.subplots(figsize=(8, 4.5), facecolor=SURFACE)
-    ax.set_facecolor(SURFACE)
+    if not panels and len(metrics) > len(LINE_STYLES):
+        raise ValueError(f"At most {len(LINE_STYLES)} metrics on one axis; use panels=True")
 
-    for i, (run_dir, label) in enumerate(zip(run_dirs, labels)):
+    n_axes = len(metrics) if panels else 1
+    fig, axes = plt.subplots(1, n_axes, figsize=(4 * n_axes + 1 if panels else 8, 4.5),
+                             facecolor=SURFACE, squeeze=False)
+    axes = axes[0]
+
+    colors = {}
+    for run_dir, label in zip(run_dirs, labels):
+        color = colors.setdefault(label, SERIES_COLORS[len(colors) % len(SERIES_COLORS)])
         history = load_history(run_dir)
         gens = [r["generation"] for r in history]
-        color = SERIES_COLORS[i % len(SERIES_COLORS)]
-        ax.plot(gens, [r["best"] for r in history], color=color, linewidth=2, label=f"{label} best")
-        ax.plot(gens, [r["mean"] for r in history], color=color, linewidth=2, linestyle="--",
-                label=f"{label} mean")
-        ax.annotate(label, (gens[-1], history[-1]["best"]), xytext=(6, 0), textcoords="offset points",
-                    va="center", color=TEXT_PRIMARY, fontsize=9)
+        for i, metric in enumerate(metrics):
+            ax = axes[i] if panels else axes[0]
+            style = "-" if panels else LINE_STYLES[i]
+            ax.plot(gens, [r.get(metric, float("nan")) for r in history], color=color, linewidth=2,
+                    linestyle=style, label=label if panels else f"{label} {metric}")
 
-    ax.set_title(title, color=TEXT_PRIMARY, loc="left")
-    ax.set_xlabel("Generation", color=TEXT_SECONDARY)
-    ax.set_ylabel("Fitness", color=TEXT_SECONDARY)
-    ax.tick_params(colors=TEXT_SECONDARY)
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.grid(axis="y", color=GRID, linewidth=0.8)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    for side in ("left", "bottom"):
-        ax.spines[side].set_color(AXIS)
-    ax.legend(frameon=False, labelcolor=TEXT_PRIMARY, fontsize=9)
+    for i, ax in enumerate(axes):
+        ax.set_facecolor(SURFACE)
+        if panels:
+            ax.set_title(metrics[i], color=TEXT_PRIMARY, loc="left", fontsize=10)
+        ax.set_xlabel("Generation", color=TEXT_SECONDARY)
+        ax.tick_params(colors=TEXT_SECONDARY)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.grid(axis="y", color=GRID, linewidth=0.8)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color(AXIS)
+    if not panels:
+        axes[0].set_ylabel(ylabel, color=TEXT_SECONDARY)
 
+    # One legend entry per label (and metric), even with several seeds per label
+    handles, names = axes[0].get_legend_handles_labels()
+    unique = dict(zip(names, handles))
+    axes[0].legend(unique.values(), unique.keys(), frameon=False, labelcolor=TEXT_PRIMARY, fontsize=9)
+
+    fig.suptitle(title, color=TEXT_PRIMARY, x=0.01, ha="left")
     fig.tight_layout()
     fig.savefig(out_path, dpi=120)
     plt.close(fig)

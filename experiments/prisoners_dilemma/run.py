@@ -34,12 +34,13 @@ from selfish_lora.checkpoint import save_checkpoint, load_checkpoint, restore_rn
 from game import BOTS, DEFECT, INVALID, SYSTEM_PROMPT, build_prompt, parse_move, score_round
 
 
-def play_tournament(model, tokenizer, population, bot_names, rounds, batch_size):
+def play_tournament(model, tokenizer, population, bot_names, rounds, batch_size, self_play=True):
     """
     Play all matches simultaneously, one round at a time.
 
     Players are genome indices (ints) or bot names (strings). Each round, each
     genome is loaded once and answers every one of its matches in a batch.
+    With self_play=False, genomes only play the bots.
 
     Returns:
         matches: list of dicts with players "a", "b" and their move lists
@@ -47,7 +48,9 @@ def play_tournament(model, tokenizer, population, bot_names, rounds, batch_size)
         invalid: dict genome index -> count of unparseable moves
     """
     genome_ids = list(range(len(population)))
-    pairs = list(itertools.combinations(genome_ids, 2)) + [(g, b) for g in genome_ids for b in bot_names]
+    pairs = [(g, b) for g in genome_ids for b in bot_names]
+    if self_play:
+        pairs += list(itertools.combinations(genome_ids, 2))
     matches = [{"a": a, "b": b, "moves": {a: [], b: []}} for a, b in pairs]
 
     by_player = defaultdict(list)
@@ -96,10 +99,12 @@ def behaviour_metrics(matches, genome_ids, bot_names, best):
 
     - coop_rate: share of C moves by genomes
     - retaliation: P(genome plays D | opponent played D last round)
+    - coop_vs_<bot>: the population's cooperation rate against each bot
     - best_coop_vs_<bot>: the best genome's cooperation rate against each bot
     """
     coop, total, retaliate, provoked = 0, 0, 0, 0
     best_vs_bot = {}
+    vs_bot = defaultdict(list)
     for m in matches:
         for p in (m["a"], m["b"]):
             if p not in genome_ids:
@@ -111,12 +116,16 @@ def behaviour_metrics(matches, genome_ids, bot_names, best):
                 if prev_theirs == DEFECT:
                     provoked += 1
                     retaliate += now_mine == DEFECT
-            if p == best and _opponent(m, p) in bot_names:
-                best_vs_bot[f"best_coop_vs_{_opponent(m, p)}"] = mine.count("C") / len(mine)
+            if _opponent(m, p) in bot_names:
+                rate = mine.count("C") / len(mine)
+                vs_bot[f"coop_vs_{_opponent(m, p)}"].append(rate)
+                if p == best:
+                    best_vs_bot[f"best_coop_vs_{_opponent(m, p)}"] = rate
 
     return {
         "coop_rate": coop / max(total, 1),
         "retaliation": retaliate / provoked if provoked else float("nan"),
+        **{k: float(np.mean(v)) for k, v in vs_bot.items()},
         **best_vs_bot,
     }
 
@@ -127,7 +136,10 @@ def main():
     parser.add_argument("--population", type=int, default=16)
     parser.add_argument("--rounds", type=int, default=8, help="Rounds per match")
     parser.add_argument("--bots", default="tft,alld", help=f"Comma-separated from {list(BOTS)}, or ''")
-    parser.add_argument("--mutation-std", type=float, default=0.05)
+    parser.add_argument("--self-play", action=argparse.BooleanOptionalAction, default=True,
+                        help="Genomes play each other as well as the bots (--no-self-play: bots only)")
+    parser.add_argument("--mutation-std", type=float, default=0.02, help="Noise added to each child")
+    parser.add_argument("--initial-std", type=float, default=0.03, help="Noise used to diversify generation 0")
     parser.add_argument("--lora-rank", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--control", action="store_true", help="Random selection baseline")
@@ -150,7 +162,7 @@ def main():
         parser.error(f"Unknown bots: {unknown}")
 
     cfg = EvolutionConfig(population_size=args.population, mutation_std=args.mutation_std,
-                          initial_std=args.mutation_std)
+                          initial_std=args.initial_std)
     start = ckpt["next_generation"] if ckpt else 0
     log = RunLog(run_dir, {**vars(args), "evolution": cfg.to_dict()}, start_generation=start)
 
@@ -172,7 +184,7 @@ def main():
 
     for gen in range(start, args.generations):
         matches, payoffs, invalid = play_tournament(model, tokenizer, population, bot_names,
-                                                    args.rounds, args.batch_size)
+                                                    args.rounds, args.batch_size, args.self_play)
         fitness = [float(np.mean(payoffs[g])) for g in genome_ids]
         best = int(np.argmax(fitness))
 

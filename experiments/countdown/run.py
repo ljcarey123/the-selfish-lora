@@ -49,7 +49,8 @@ def main():
     parser.add_argument("--generations", type=int, default=30)
     parser.add_argument("--population", type=int, default=16)
     parser.add_argument("--puzzles-per-gen", type=int, default=32)
-    parser.add_argument("--mutation-std", type=float, default=0.05)
+    parser.add_argument("--mutation-std", type=float, default=0.01, help="Noise added to each child")
+    parser.add_argument("--initial-std", type=float, default=0.015, help="Noise used to diversify generation 0")
     parser.add_argument("--lora-rank", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--heldout-every", type=int, default=5)
@@ -68,7 +69,7 @@ def main():
         args = argparse.Namespace(**ckpt["args"])  # Saved settings win on resume
 
     cfg = EvolutionConfig(population_size=args.population, mutation_std=args.mutation_std,
-                          initial_std=args.mutation_std)
+                          initial_std=args.initial_std)
     start = ckpt["next_generation"] if ckpt else 0
     log = RunLog(run_dir, {**vars(args), "evolution": cfg.to_dict()}, start_generation=start)
 
