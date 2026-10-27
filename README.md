@@ -26,6 +26,22 @@ experiments/
 legacy/gridworld/          the original 16x16 gridworld project (see its README)
 ```
 
+## Status (2026-10-27)
+
+Full write-up with figures in [docs/RESULTS.md](docs/RESULTS.md). So far:
+
+- **Prisoner's dilemma vs a bot panel (2 seeds):** selection turns the base
+  model's always-defect into mostly cooperation, and keeps the population
+  working; without selection, accumulated mutations break nearly all outputs
+  (mutational meltdown).
+- **One seed evolved end-game defection:** cooperate for five rounds, defect
+  from round 6, the last round of every match, although the model was told
+  the length was unknown.
+- **Reciprocity (tit-for-tat) has not evolved:** reactive strategies are rare
+  among mutants, and the few seen had the wrong sign.
+- **Countdown:** no improvement over the control at this budget; fitness is
+  dominated by which puzzles each generation draws.
+
 ## The two experiments
 
 | | Countdown | Prisoner's dilemma |

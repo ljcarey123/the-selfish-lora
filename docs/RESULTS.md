@@ -56,7 +56,18 @@ Genomes play only fixed bots (tit-for-tat, grudger, always-defect), 6 rounds
 per match, population 16, 20 generations. Theoretical payoffs per round
 against this panel: always-defect 1.44, always-cooperate 2.00, tit-for-tat 2.28.
 
-![PD panel seed 0](figures/pd_panel_s0.png)
+![PD panel, 2 seeds](figures/pd_panel.png)
+
+Averages over the last 5 generations:
+
+| run | mean payoff | cooperation | invalid moves | highest best |
+|---|---|---|---|---|
+| evolved, seed 0 | 1.45 | 0.64 | 0.25 | 2.00 |
+| evolved, seed 1 | 1.69 | 0.61 | 0.09 | 2.28 |
+| control, seed 0 | 0.18 | 0.01 | 0.92 | 2.17 |
+| control, seed 1 | 0.06 | 0.02 | 0.97 | 2.00 |
+
+Both seeds agree on the pattern below. Details are from seed 0.
 
 - **Selection steers:** the evolved population went from 1% to 60-80%
   cooperation; its best genome is a clean always-cooperate (agrees with ALLC
@@ -102,10 +113,33 @@ lengths (left padding) can flip borderline greedy moves. Tournament batches
 hold same-length prompts so runs are unaffected, but analysis tools now
 generate one prompt at a time.
 
+## 5. Countdown: no improvement at this budget (null result)
+
+Runs `countdown/evolved_s0` / `control_s0`: population 12, 15 generations,
+24 shared puzzles per generation, held-out set of 100.
+
+| | gen 0 | gen 5 | gen 10 | gen 14 | mean fitness, all gens |
+|---|---|---|---|---|---|
+| evolved held-out accuracy | 6% | 6% | 6% | 4% | 0.096 |
+| control held-out accuracy | 6% | 6% | 4% | 6% | 0.087 |
+
+Evolved and control are indistinguishable; held-out differences are within
+noise (about ±2.4 points on 100 puzzles). Both runs' fitness spikes at
+generation 9, when the shared puzzle batch happened to be easy, so batch
+difficulty dominates the fitness signal.
+
+**Meaning:** with 24 puzzles, one extra correct answer moves fitness by 0.04,
+so selection mostly picks the luckiest genome (winner's curse). Unlike the
+prisoner's dilemma, where a behaviour flip changes payoff a lot, Countdown
+gives a weak signal per mutation. It needs a much larger evaluation set per
+generation, or an easier task where the base model is nearer 30-50%.
+
 ## Open questions and next ideas
 
 - Random match lengths (e.g. geometric, mean 6) to remove the end-game cue;
   this should leave reciprocity as the only way past 2.00.
+- Countdown: 128+ puzzles per generation (cost scales linearly), or a
+  task the base model half-solves, before concluding anything about it.
 
 - Weight decay towards the base genome each generation, to bound mutation
   load (tests whether the invalid-rate drift goes away).
