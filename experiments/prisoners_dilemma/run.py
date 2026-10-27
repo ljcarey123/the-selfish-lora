@@ -5,8 +5,11 @@ Each generation is a round-robin tournament: every genome plays every other
 genome, plus a few fixed-strategy bots (tit-for-tat, always-defect, ...).
 Fitness is a genome's average payoff per round across all its matches.
 
-    python experiments/prisoners_dilemma/run.py --generations 30
-    python experiments/prisoners_dilemma/run.py --generations 30 --control
+    python experiments/prisoners_dilemma/run.py --generations 30 --run-name evolved_s0
+    python experiments/prisoners_dilemma/run.py --generations 30 --run-name control_s0 --control
+
+A checkpoint is saved after every generation. Re-running a command with the
+same --run-name resumes where it stopped (or exits if the run is finished).
 """
 
 import argparse
@@ -22,10 +25,11 @@ import torch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from selfish_lora.model import load_model
-from selfish_lora.genome import genome_keys, genome_from_model, load_genome, save_genome, genome_norm
+from selfish_lora.genome import genome_keys, fixed_keys, genome_from_model, load_genome, save_genome, genome_norm
 from selfish_lora.evolution import EvolutionConfig, initial_population, next_generation, mean_pairwise_distance
 from selfish_lora.generate import generate
 from selfish_lora.runlog import RunLog, make_run_dir, plot_runs
+from selfish_lora.checkpoint import save_checkpoint, load_checkpoint, restore_rng
 
 from game import BOTS, DEFECT, INVALID, SYSTEM_PROMPT, build_prompt, parse_move, score_round
 
@@ -128,11 +132,17 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--control", action="store_true", help="Random selection baseline")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--run-name", help="Fixed run directory name; re-running resumes it")
     args = parser.parse_args()
 
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
+    tag = "control" if args.control else "evolved"
+    run_dir = make_run_dir(os.path.dirname(__file__), args.run_name, tag)
+    ckpt = load_checkpoint(run_dir)
+    if ckpt and ckpt["done"]:
+        print(f"Run already finished: {run_dir}")
+        return
+    if ckpt:
+        args = argparse.Namespace(**ckpt["args"])  # Saved settings win on resume
 
     bot_names = [b for b in args.bots.split(",") if b]
     unknown = set(bot_names) - set(BOTS)
@@ -141,14 +151,26 @@ def main():
 
     cfg = EvolutionConfig(population_size=args.population, mutation_std=args.mutation_std,
                           initial_std=args.mutation_std)
-    run_dir = make_run_dir(os.path.dirname(__file__), "control" if args.control else "evolved")
-    log = RunLog(run_dir, {**vars(args), "evolution": cfg.to_dict()})
+    start = ckpt["next_generation"] if ckpt else 0
+    log = RunLog(run_dir, {**vars(args), "evolution": cfg.to_dict()}, start_generation=start)
 
+    # Seed after loading: load_model reseeds torch to fix the shared A matrices
     model, tokenizer = load_model(lora_rank=args.lora_rank)
-    population = initial_population(genome_from_model(model, genome_keys(model)), cfg)
+    device = next(model.parameters()).device
+
+    if ckpt:
+        load_genome(model, ckpt["fixed"])
+        population = [{k: v.to(device) for k, v in g.items()} for g in ckpt["population"]]
+        restore_rng(ckpt)
+    else:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        population = initial_population(genome_from_model(model, genome_keys(model)), cfg)
+    fixed = genome_from_model(model, fixed_keys(model))
     genome_ids = list(range(len(population)))
 
-    for gen in range(args.generations):
+    for gen in range(start, args.generations):
         matches, payoffs, invalid = play_tournament(model, tokenizer, population, bot_names,
                                                     args.rounds, args.batch_size)
         fitness = [float(np.mean(payoffs[g])) for g in genome_ids]
@@ -166,10 +188,12 @@ def main():
 
         if gen == args.generations - 1:
             save_genome(population[best], os.path.join(run_dir, "best.pt"))
+            save_checkpoint(run_dir, vars(args), gen + 1, population, fixed, done=True)
         else:
             population = next_generation(population, fitness, cfg, control=args.control)
+            save_checkpoint(run_dir, vars(args), gen + 1, population, fixed)
 
-    plot_runs([run_dir], ["control" if args.control else "evolved"], os.path.join(run_dir, "fitness.png"),
+    plot_runs([run_dir], [tag], os.path.join(run_dir, "fitness.png"),
               title="Prisoner's dilemma: payoff per round")
     print(f"Run saved to {run_dir}")
 

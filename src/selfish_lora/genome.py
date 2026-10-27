@@ -22,6 +22,11 @@ def genome_keys(model, evolve_a: bool = False) -> list[str]:
     return keys
 
 
+def fixed_keys(model) -> list[str]:
+    """Names of the LoRA parameters that are not evolved (the shared A matrices)."""
+    return [name for name, _ in model.named_parameters() if "lora_A" in name]
+
+
 def genome_from_model(model, keys: list[str]) -> Genome:
     """Copy the model's current LoRA parameters into a new genome."""
     params = dict(model.named_parameters())

@@ -15,11 +15,13 @@ src/selfish_lora/          shared machinery used by every experiment
   evolution.py             initial population, selection, crossover, mutation
   generate.py              batched greedy generation
   runlog.py                per-generation history.jsonl + fitness plots
+  checkpoint.py            save/restore runs between generations
 
 experiments/
   countdown/               single-agent skill: arithmetic puzzles (reasoning-gym)
   prisoners_dilemma/       multi-agent: iterated prisoner's dilemma tournament
   compare_runs.py          overlay fitness curves from several runs
+  run_queue.py             run a plan of experiments, resuming after interruptions
 
 legacy/gridworld/          the original 16x16 gridworld project (see its README)
 ```
@@ -41,8 +43,28 @@ Run one of them, then the same thing with `--control` (identical but selection i
 .venv/Scripts/python experiments/compare_runs.py experiments/countdown/runs/<evolved> experiments/countdown/runs/<control>
 ```
 
-Each run writes `config.json`, `history.jsonl`, `best.pt` and `fitness.png` to
-`experiments/<name>/runs/<timestamp>_<tag>/`.
+Each run writes `config.json`, `history.jsonl`, `checkpoint.pt`, `best.pt` and
+`fitness.png` to `experiments/<name>/runs/<run-name>/` (a timestamped name if
+`--run-name` is not given).
+
+## Resuming after an interruption
+
+Runs checkpoint after every generation (population, settings and random
+number generator states), so a resumed run produces exactly the same results
+as an uninterrupted one. Re-run the same command with the same `--run-name`
+to continue; a finished run just exits.
+
+For a batch of runs, list them in a plan file and use the queue runner. After
+a reboot or closed lid, run the same command again: finished runs are skipped
+and the interrupted one resumes.
+
+```bash
+.venv/Scripts/python experiments/run_queue.py experiments/plans/<plan>.json
+.venv/Scripts/python experiments/run_queue.py experiments/plans/<plan>.json --status
+```
+
+Closing the lid usually just pauses the process (sleep); a shutdown or
+hibernate kills it, and the queue command picks it back up.
 
 ## Design choices
 

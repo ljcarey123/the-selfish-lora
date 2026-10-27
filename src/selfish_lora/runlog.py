@@ -25,19 +25,43 @@ GRID = "#e1e0d9"
 AXIS = "#c3c2b7"
 
 
-def make_run_dir(experiment_dir: str, tag: str) -> str:
-    run_dir = os.path.join(experiment_dir, "runs", f"{time.strftime('%Y%m%d-%H%M%S')}_{tag}")
+def make_run_dir(experiment_dir: str, name: str | None, tag: str) -> str:
+    """
+    Directory for a run. A given name makes the run resumable by re-running
+    the same command; without one, a fresh timestamped directory is used.
+    """
+    run_dir = os.path.join(experiment_dir, "runs", name or f"{time.strftime('%Y%m%d-%H%M%S')}_{tag}")
     os.makedirs(run_dir, exist_ok=True)
     return run_dir
 
 
 class RunLog:
-    def __init__(self, run_dir: str, config: dict):
+    def __init__(self, run_dir: str, config: dict, start_generation: int = 0):
+        """
+        Args:
+            run_dir: Run directory
+            config: Settings to record in config.json
+            start_generation: Generation the run is starting from. When resuming,
+                history from earlier generations is kept and anything later
+                (a generation interrupted before its checkpoint) is dropped.
+        """
         self.run_dir = run_dir
         self.history_path = os.path.join(run_dir, "history.jsonl")
-        self.start = time.time()
-        with open(os.path.join(run_dir, "config.json"), "w") as f:
-            json.dump(config, f, indent=2)
+        elapsed_before = 0.0
+
+        if start_generation > 0 and os.path.exists(self.history_path):
+            kept = [r for r in load_history(run_dir) if r["generation"] < start_generation]
+            with open(self.history_path, "w") as f:
+                f.writelines(json.dumps(r) + "\n" for r in kept)
+            if kept:
+                elapsed_before = kept[-1]["elapsed_s"]
+            print(f"Resuming {run_dir} at generation {start_generation}")
+        else:
+            open(self.history_path, "w").close()
+            with open(os.path.join(run_dir, "config.json"), "w") as f:
+                json.dump(config, f, indent=2)
+
+        self.start = time.time() - elapsed_before
 
     def log(self, generation: int, fitness: list[float], **extra):
         """Record one generation's fitness scores plus any extra metrics."""
