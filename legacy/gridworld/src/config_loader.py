@@ -1,15 +1,15 @@
 import json
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 # Build the path to the project root from this file's location (src/ -> root)
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-# Load environment variables from the .env file in the project root
-load_dotenv(dotenv_path=os.path.join(project_root, '.env'))
+# Load environment variables from the nearest .env (the repo root, since this code now lives in legacy/gridworld/)
+load_dotenv(find_dotenv())
 
 # Get the path to the prompts file from the environment variable
-_prompts_file_path = os.getenv('PROMPTS_FILE_PATH')
+_prompts_file_path = os.getenv('PROMPTS_FILE_PATH', 'config/prompts.json')
 
 _config = {}
 # Construct the full path to the prompts.json file

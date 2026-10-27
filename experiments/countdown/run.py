@@ -1,0 +1,103 @@
+"""
+Evolve LoRA adapters to solve Countdown puzzles.
+
+Each generation, every genome answers the same fresh batch of puzzles, so
+fitness differences come from the weights rather than puzzle luck. The best
+genome is also scored on a fixed held-out set to check it generalises.
+
+    python experiments/countdown/run.py --generations 30
+    python experiments/countdown/run.py --generations 30 --control
+    python experiments/compare_runs.py experiments/countdown/runs/<evolved> experiments/countdown/runs/<control>
+"""
+
+import argparse
+import os
+import random
+import sys
+
+import numpy as np
+import torch
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
+
+from selfish_lora.model import load_model
+from selfish_lora.genome import genome_keys, genome_from_model, load_genome, save_genome, genome_norm
+from selfish_lora.evolution import EvolutionConfig, initial_population, next_generation, mean_pairwise_distance
+from selfish_lora.generate import generate
+from selfish_lora.runlog import RunLog, make_run_dir, plot_runs
+
+from task import CountdownTask, SYSTEM_PROMPT
+
+TRAIN_POOL = 5000
+HELDOUT_SIZE = 100
+
+
+def evaluate(model, tokenizer, genome, task, indices, batch_size):
+    load_genome(model, genome)
+    completions = generate(model, tokenizer, task.prompts(indices), SYSTEM_PROMPT,
+                           max_new_tokens=24, batch_size=batch_size)
+    scores = task.score(indices, completions)
+    return float(np.mean(scores)), float(np.mean([s == 1.0 for s in scores])), completions
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--generations", type=int, default=30)
+    parser.add_argument("--population", type=int, default=16)
+    parser.add_argument("--puzzles-per-gen", type=int, default=32)
+    parser.add_argument("--mutation-std", type=float, default=0.05)
+    parser.add_argument("--lora-rank", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--heldout-every", type=int, default=5)
+    parser.add_argument("--control", action="store_true", help="Random selection baseline")
+    parser.add_argument("--seed", type=int, default=0)
+    args = parser.parse_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+
+    cfg = EvolutionConfig(population_size=args.population, mutation_std=args.mutation_std,
+                          initial_std=args.mutation_std)
+    run_dir = make_run_dir(os.path.dirname(__file__), "control" if args.control else "evolved")
+    log = RunLog(run_dir, {**vars(args), "evolution": cfg.to_dict()})
+
+    model, tokenizer = load_model(lora_rank=args.lora_rank)
+    base = genome_from_model(model, genome_keys(model))
+
+    train = CountdownTask(size=TRAIN_POOL, seed=args.seed)
+    heldout = CountdownTask(size=HELDOUT_SIZE, seed=10_000 + args.seed)
+    heldout_idx = list(range(HELDOUT_SIZE))
+
+    base_score, base_acc, samples = evaluate(model, tokenizer, base, heldout, heldout_idx, args.batch_size)
+    print(f"Base model held-out: score {base_score:.3f}, accuracy {base_acc:.1%}")
+    print("Sample completions:", samples[:3])
+
+    population = initial_population(base, cfg)
+    for gen in range(args.generations):
+        indices = random.sample(range(TRAIN_POOL), args.puzzles_per_gen)
+        results = [evaluate(model, tokenizer, g, train, indices, args.batch_size) for g in population]
+        fitness = [r[0] for r in results]
+        best = population[int(np.argmax(fitness))]
+
+        extra = {
+            "best_accuracy": max(r[1] for r in results),
+            "diversity": mean_pairwise_distance(population),
+            "best_norm": genome_norm(best),
+        }
+        if gen % args.heldout_every == 0 or gen == args.generations - 1:
+            extra["heldout_score"], extra["heldout_accuracy"], _ = evaluate(
+                model, tokenizer, best, heldout, heldout_idx, args.batch_size)
+        log.log(gen, fitness, **extra)
+
+        if gen < args.generations - 1:
+            population = next_generation(population, fitness, cfg, control=args.control)
+
+    save_genome(best, os.path.join(run_dir, "best.pt"))
+    plot_runs([run_dir], ["control" if args.control else "evolved"], os.path.join(run_dir, "fitness.png"),
+              title=f"Countdown fitness (base held-out score {base_score:.3f})")
+    print(f"Run saved to {run_dir}")
+
+
+if __name__ == "__main__":
+    main()
