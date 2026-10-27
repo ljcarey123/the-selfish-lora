@@ -10,8 +10,5 @@
   "combat": {
     "enabled": true,
     "energy_transfer": true
-  },
-  "food": {
-    "regrowth_rate": 0.05
   }
 }

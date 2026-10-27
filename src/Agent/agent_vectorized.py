@@ -49,6 +49,14 @@ class VectorizedAgent:
         # Fitness tracking (normalized percentage for cross-generation comparison)
         self.fitness_percentage = 100.0
 
+        # Extended metrics for analysis
+        self.starting_position = None  # (x, y) where agent spawned
+        self.unique_positions_visited = set()  # Set of (x, y) positions
+        self.first_food_turn = None  # Turn number when first food collected
+        self.first_combat_turn = None  # Turn number when first combat occurred
+        self.death_turn = None  # Turn number when agent died
+        self.total_distance_traveled = 0.0  # Cumulative movement distance
+
     def sync_from_environment(self, energy: float, alive: bool, position: tuple):
         """
         Sync state from vectorized environment.
@@ -131,18 +139,75 @@ class VectorizedAgent:
         self.energy = 100.0
         self.is_alive = True
         self.position = None
+        # Reset extended metrics
+        self.starting_position = None
+        self.unique_positions_visited = set()
+        self.first_food_turn = None
+        self.first_combat_turn = None
+        self.death_turn = None
+        self.total_distance_traveled = 0.0
 
     def reset_for_round(self):
-        """Reset agent for new round within generation (keeps cumulative stats)."""
+        """
+        Reset agent for new round within generation.
+        Keeps cumulative food/combat stats across rounds.
+        """
         self.action_history.clear()
         self.path.clear()
         self.energy = 100.0
         self.is_alive = True
         self.position = None
+        # Note: Do NOT reset food_collected, combat_attacks, combat_victims
+        # These accumulate across rounds within a generation for tournament scoring
+        # Reset per-round metrics
+        self.starting_position = None
+        self.unique_positions_visited = set()
+        self.first_food_turn = None
+        self.first_combat_turn = None
+        self.death_turn = None
+        self.total_distance_traveled = 0.0
 
     def get_path_copy(self) -> list:
         """Get a copy of the path for visualization."""
         return self.path.copy()
+
+    def update_position_metrics(self, new_position: tuple, old_position: tuple = None, turn: int = 0):
+        """
+        Update position-related metrics.
+
+        Args:
+            new_position: New (x, y) position
+            old_position: Previous (x, y) position (for distance calculation)
+            turn: Current turn number
+        """
+        # Set starting position on first call
+        if self.starting_position is None:
+            self.starting_position = new_position
+
+        # Track unique positions
+        self.unique_positions_visited.add(new_position)
+
+        # Calculate distance traveled
+        if old_position is not None and old_position != new_position:
+            # Manhattan distance
+            dx = abs(new_position[0] - old_position[0])
+            dy = abs(new_position[1] - old_position[1])
+            self.total_distance_traveled += (dx + dy)
+
+    def record_first_food(self, turn: int):
+        """Record the turn when first food was collected."""
+        if self.first_food_turn is None:
+            self.first_food_turn = turn
+
+    def record_first_combat(self, turn: int):
+        """Record the turn when first combat occurred."""
+        if self.first_combat_turn is None:
+            self.first_combat_turn = turn
+
+    def record_death(self, turn: int):
+        """Record the turn when agent died."""
+        if self.death_turn is None:
+            self.death_turn = turn
 
     def __repr__(self):
         """String representation."""

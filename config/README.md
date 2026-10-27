@@ -20,8 +20,7 @@ Contains all game mechanics parameters that affect gameplay:
   - `enabled`: Whether combat is enabled (default: true)
   - `energy_transfer`: Whether attackers steal energy from victims (default: true)
 
-- **food**:
-  - `regrowth_rate`: Probability of food regrowth per turn (default: 0.05)
+**Note**: Food regrowth behavior is controlled by the `GenerationManager` class, which implements an evolutionary difficulty curve with three phases based on generation number. This is intentionally separate from the config to maintain the evolutionary challenge progression.
 
 ### prompts.json
 

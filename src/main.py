@@ -17,16 +17,16 @@ from Simulation.simulation_vectorized import VectorizedSimulation
 
 def main(
     num_generations: int = 20,
-    population_size: int = 32,
+    population_size: int = 64,            # Increased from 32 for more diversity
     batch_size: int = 8,
     turns_per_batch: int = 100,
-    mutation_strength: float = 0.005,
-    num_elites: int = 5,
-    initial_noise: float = 0.01,
-    sparse_mutation_rate: float = 0.2,
-    weight_regularization: float = 0.0005,
+    mutation_strength: float = 0.01,      # Increased from 0.005 for more exploration
+    num_elites: int = 8,                  # Increased with population
+    initial_noise: float = 0.05,          # Increased from 0.01 for more diverse starts
+    sparse_mutation_rate: float = 0.3,    # Increased from 0.2 to mutate more weights
+    weight_regularization: float = 0.0001, # Reduced from 0.0005 to allow more divergence
     random_init: bool = False,
-    rounds_per_generation: int = 2,
+    rounds_per_generation: int = 3,       # Increased from 2 for better evaluation
 ):
     """
     Run the vectorized evolutionary simulation.
@@ -67,6 +67,7 @@ def main(
 
     # Initialize vectorized simulation
     sim = VectorizedSimulation(
+        num_generations=num_generations,
         population_size=population_size,
         batch_size=batch_size,
         turns_per_batch=turns_per_batch,
@@ -150,6 +151,22 @@ def main(
         print(f"Generating path animations for top 3 agents...")
         viz.animate_top_n_champion_paths(generation=final_gen, n=3, save_as_gif=True)
 
+        # Generate full environment playthrough animations for final generation
+        print(f"\nGenerating full environment playthrough animations...")
+        turn_history = viz.data.get("turn_by_turn_history", {})
+        if str(final_gen) in turn_history:
+            for round_idx in turn_history[str(final_gen)].keys():
+                for batch_idx in turn_history[str(final_gen)][round_idx].keys():
+                    print(f"  - Round {int(round_idx) + 1}, Batch {int(batch_idx) + 1}...")
+                    viz.animate_full_environment_playthrough(
+                        generation=final_gen,
+                        round_idx=int(round_idx),
+                        batch_idx=int(batch_idx),
+                        save_as_gif=True
+                    )
+        else:
+            print(f"  - No turn-by-turn data available for full environment animations")
+
         if num_generations > 1:
             print(f"\nGenerating genetic diversity plot...")
             viz.plot_genetic_diversity(save_as_png=True)
@@ -157,13 +174,35 @@ def main(
             print(f"Generating behavioral metrics plot...")
             viz.plot_behavioural_metrics(save_as_png=True)
 
+            print(f"\nGenerating extended analytics visualizations...")
+            print(f"  - Starting position heatmap...")
+            viz.plot_starting_position_heatmap(save_as_png=True)
+
+            print(f"  - Distance vs fitness plot...")
+            viz.plot_distance_vs_fitness(save_as_png=True)
+
+            print(f"  - Metrics evolution plots...")
+            viz.plot_metrics_evolution(save_as_png=True)
+
+            print(f"  - Quartile comparison radar chart...")
+            viz.plot_quartile_comparison_radar(save_as_png=True)
+
+            print(f"  - Survival curve...")
+            viz.plot_survival_curve(save_as_png=True)
+
         print(f"\n✓ All visualizations generated successfully!")
         print(f"  - Heatmaps: ./output/agent_heatmap_gen_*.png")
         print(f"  - Timelines: ./output/action_timeline_gen_*.png")
         print(f"  - Animations: ./output/gifs/champion_paths_gen_*.gif")
+        print(f"  - Full environment playthroughs: ./output/gifs/full_environment_gen_*.gif")
         if num_generations > 1:
             print(f"  - Genetic diversity: ./output/genetic_diversity.png")
             print(f"  - Behavioral metrics: ./output/behavioural_metrics.png")
+            print(f"  - Starting position heatmap: ./output/starting_position_heatmap.png")
+            print(f"  - Distance vs fitness: ./output/distance_vs_fitness.png")
+            print(f"  - Metrics evolution: ./output/metrics_evolution.png")
+            print(f"  - Quartile radar: ./output/quartile_comparison_radar_gen_*.png")
+            print(f"  - Survival curve: ./output/survival_curve.png")
 
     except Exception as e:
         print(f"\n✗ Error generating visualizations: {e}")

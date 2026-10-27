@@ -10,6 +10,7 @@ This refactored environment prioritizes:
 
 import json
 import os
+import random
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from config_loader import GRID_SYMBOLS
@@ -341,7 +342,11 @@ class VectorizedEnvironment:
                 moves=moves_str
             )
 
-        prompt += self.prompt_config["PROMPT_FORMAT"]["action_prompt"]
+        # Randomize action order to avoid positional bias
+        actions = self.prompt_config["VALID_ACTIONS"].copy()
+        random.shuffle(actions)
+        action_list = ", ".join(actions)
+        prompt += f"Output one: {action_list}\n"
 
         return prompt
 

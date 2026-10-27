@@ -111,12 +111,12 @@ class InferenceEngine:
                     actions.append(action)
                     success_flags.append(True)
                 else:
-                    actions.append("MOVE_NORTH")  # Default fallback
+                    actions.append("INVALID")  # Invalid parse - no movement
                     success_flags.append(False)
 
             except Exception as e:
                 print(f"[ERROR] Inference failed for agent {agent_id}: {e}")
-                actions.append("MOVE_NORTH")
+                actions.append("INVALID")  # Exception - no movement
                 raw_outputs.append(f"ERROR: {str(e)}")
                 success_flags.append(False)
 

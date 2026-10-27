@@ -229,6 +229,139 @@ class Visualiser:
             plt.show()
         plt.close(fig)
 
+    def animate_full_environment_playthrough(self, generation, round_idx=0, batch_idx=0, save_as_gif=True):
+        """
+        Creates a comprehensive animation showing ALL agents interacting in the environment.
+        Shows the full playthrough with environment changes, all agent movements, combat, food collection, etc.
+
+        Args:
+            generation (int): The generation number to animate
+            round_idx (int): Round index within generation
+            batch_idx (int): Batch index within round
+            save_as_gif (bool): If True, saves the animation as a GIF
+
+        """
+        # Get turn-by-turn history
+        turn_history = self.data.get("turn_by_turn_history", {})
+        gen_str = str(generation)
+        round_str = str(round_idx)
+        batch_str = str(batch_idx)
+
+        if gen_str not in turn_history:
+            print(f"Error: No turn-by-turn history for generation {generation}")
+            print(f"Available generations: {list(turn_history.keys())}")
+            return
+
+        if round_str not in turn_history[gen_str]:
+            print(f"Error: No data for round {round_idx} in generation {generation}")
+            print(f"Available rounds: {list(turn_history[gen_str].keys())}")
+            return
+
+        if batch_str not in turn_history[gen_str][round_str]:
+            print(f"Error: No data for batch {batch_idx} in generation {generation} round {round_idx}")
+            print(f"Available batches: {list(turn_history[gen_str][round_str].keys())}")
+            return
+
+        turn_states = turn_history[gen_str][round_str][batch_str]
+
+        if not turn_states:
+            print(f"Error: No turn states recorded for gen {generation}, round {round_idx}, batch {batch_idx}")
+            return
+
+        print(f"Animating full environment: Gen {generation}, Round {round_idx + 1}, Batch {batch_idx + 1}")
+        print(f"Total turns: {len(turn_states)}")
+
+        # Setup figure
+        fig, (ax_env, ax_info) = plt.subplots(1, 2, figsize=(16, 8), gridspec_kw={'width_ratios': [3, 1]})
+        fig.suptitle(f"Generation {generation} - Round {round_idx + 1}, Batch {batch_idx + 1}", fontsize=16)
+
+        # Environment visualization
+        ax_env.set_title("Environment")
+        ax_env.set_xticks([])
+        ax_env.set_yticks([])
+
+        # Info panel
+        ax_info.axis('off')
+
+        # Get number of agents
+        num_agents = len(turn_states[0]["agents"])
+        colors = plt.cm.tab20(np.linspace(0, 1, num_agents))
+
+        def init():
+            ax_env.clear()
+            ax_info.clear()
+            ax_info.axis('off')
+            return []
+
+        def update(frame):
+            if frame >= len(turn_states):
+                return []
+
+            state = turn_states[frame]
+            ax_env.clear()
+            ax_info.clear()
+            ax_info.axis('off')
+
+            # Draw environment grid
+            grid = np.array(state["grid"])
+            numeric_grid = self._convert_to_numeric_grid(grid)
+            ax_env.imshow(numeric_grid, cmap="Greens", alpha=0.4, interpolation='nearest')
+
+            # Draw all agents
+            for i, agent in enumerate(state["agents"]):
+                if agent["alive"]:
+                    y, x = agent["position"]
+                    # Agent marker
+                    ax_env.plot(x, y, 'o', color=colors[i], markersize=15, markeredgecolor='black', markeredgewidth=1.5)
+                    # Energy indicator (size based on energy)
+                    energy_size = max(5, agent["energy"] / 10)
+                    ax_env.plot(x, y, 'o', color=colors[i], markersize=energy_size, alpha=0.3)
+
+            # Info panel - show turn and agent stats
+            info_text = f"Turn: {state['turn'] + 1}\n\n"
+            info_text += f"Events this turn:\n"
+            info_text += f"  Food: {state.get('food_collected_this_turn', 0)}\n"
+            info_text += f"  Combat: {state.get('combat_events_this_turn', 0)}\n\n"
+            info_text += "Agents:\n"
+            info_text += "-" * 30 + "\n"
+
+            # Sort agents by energy for display
+            sorted_agents = sorted(state["agents"], key=lambda a: a["energy"], reverse=True)
+
+            for i, agent in enumerate(sorted_agents):
+                status = "ALIVE" if agent["alive"] else "DEAD"
+                action = agent.get("last_action", "N/A")
+                info_text += f"{agent['id'][:6]}: {agent['energy']:>5.1f} {status}\n"
+                if action and action != "N/A":
+                    info_text += f"    → {action}\n"
+
+            ax_info.text(0.05, 0.95, info_text, transform=ax_info.transAxes,
+                        fontsize=9, verticalalignment='top', fontfamily='monospace')
+
+            ax_env.set_title(f"Turn {state['turn'] + 1}/{len(turn_states)}")
+            ax_env.set_xticks([])
+            ax_env.set_yticks([])
+
+            return []
+
+        # Create animation
+        ani = animation.FuncAnimation(
+            fig, update, frames=len(turn_states), init_func=init,
+            interval=200, repeat=True
+        )
+
+        if save_as_gif:
+            gifs_dir = os.path.join("output", "gifs")
+            os.makedirs(gifs_dir, exist_ok=True)
+            gif_path = os.path.join(gifs_dir, f"full_environment_gen_{generation}_round_{round_idx + 1}_batch_{batch_idx + 1}.gif")
+            print(f"Saving animation to {gif_path}...")
+            ani.save(gif_path, writer="pillow", fps=5)
+            print(f"Animation saved!")
+        else:
+            plt.show()
+
+        plt.close(fig)
+
     def animate_champion_path(self, generation, champion_rank=0, save_as_gif=True):
         """
         Creates and displays an animation of a champion's path for a given generation.
@@ -792,6 +925,365 @@ def main():
     if len(champion_paths) > 1:
         print("  - Genetic diversity: ./output/genetic_diversity.png")
         print("  - Behavioral metrics: ./output/behavioural_metrics.png")
+
+
+    def plot_starting_position_heatmap(self, save_as_png=True):
+        """
+        Create a heatmap showing starting positions colored by average fitness.
+        Shows which starting locations tend to produce successful agents.
+        """
+        if not self.data.get('analytics_history'):
+            print("No analytics data available for starting position heatmap.")
+            return
+
+        # Aggregate starting positions and fitness across all generations
+        position_fitness = {}  # {(x, y): [fitness_values]}
+
+        for gen_analytics in self.data['analytics_history']:
+            # Get top quartile positions (successful agents)
+            top_positions = gen_analytics.get('top_quartile_starting_positions', [])
+            # Assign high fitness score
+            for pos in top_positions:
+                if pos:
+                    key = tuple(pos)
+                    if key not in position_fitness:
+                        position_fitness[key] = []
+                    position_fitness[key].append(1.0)  # Top quartile = 1.0
+
+            # Get bottom quartile positions (unsuccessful agents)
+            bottom_positions = gen_analytics.get('bottom_quartile_starting_positions', [])
+            # Assign low fitness score
+            for pos in bottom_positions:
+                if pos:
+                    key = tuple(pos)
+                    if key not in position_fitness:
+                        position_fitness[key] = []
+                    position_fitness[key].append(0.0)  # Bottom quartile = 0.0
+
+        if not position_fitness:
+            print("No starting position data available.")
+            return
+
+        # Calculate average fitness per position
+        grid_size = self.grid_size
+        heatmap = np.full((grid_size, grid_size), np.nan)
+
+        for (x, y), fitness_list in position_fitness.items():
+            if 0 <= x < grid_size and 0 <= y < grid_size:
+                heatmap[x, y] = np.mean(fitness_list)
+
+        # Create visualization
+        fig, ax = plt.subplots(figsize=(10, 10))
+
+        # Use a diverging colormap (blue=bad, red=good)
+        im = ax.imshow(heatmap, cmap='RdYlGn', vmin=0, vmax=1, interpolation='nearest')
+
+        ax.set_title('Starting Position Success Rate\n(Green=High Success, Red=Low Success)', fontsize=14)
+        ax.set_xlabel('Y Position')
+        ax.set_ylabel('X Position')
+
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label('Average Success Rate (1=Top Quartile, 0=Bottom Quartile)', rotation=270, labelpad=20)
+
+        # Add grid
+        ax.set_xticks(np.arange(grid_size))
+        ax.set_yticks(np.arange(grid_size))
+        ax.grid(which='both', color='gray', linestyle='-', linewidth=0.5, alpha=0.3)
+
+        plt.tight_layout()
+
+        if save_as_png:
+            output_dir = 'output'
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            png_path = os.path.join(output_dir, 'starting_position_heatmap.png')
+            plt.savefig(png_path, dpi=150, bbox_inches='tight')
+            print(f'Starting position heatmap saved to {png_path}')
+            plt.close()
+        else:
+            plt.show()
+
+    def plot_distance_vs_fitness(self, save_as_png=True):
+        """
+        Scatter plot showing relationship between distance traveled and fitness.
+        """
+        if not self.data.get('analytics_history'):
+            print("No analytics data available for distance vs fitness plot.")
+            return
+
+        generations = []
+        top_distances = []
+        bottom_distances = []
+
+        for gen_analytics in self.data['analytics_history']:
+            gen = gen_analytics.get('generation', 0)
+            top_dist = gen_analytics.get('top_quartile_avg_distance', 0)
+            bottom_dist = gen_analytics.get('bottom_quartile_avg_distance', 0)
+
+            generations.append(gen)
+            top_distances.append(top_dist)
+            bottom_distances.append(bottom_dist)
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+
+        ax.plot(generations, top_distances, 'o-', label='Top Quartile', color='green', linewidth=2, markersize=8)
+        ax.plot(generations, bottom_distances, 'o-', label='Bottom Quartile', color='red', linewidth=2, markersize=8)
+
+        ax.set_title('Distance Traveled: Top vs Bottom Quartile', fontsize=14, fontweight='bold')
+        ax.set_xlabel('Generation', fontsize=12)
+        ax.set_ylabel('Average Distance Traveled (Manhattan)', fontsize=12)
+        ax.legend(fontsize=11)
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+
+        if save_as_png:
+            output_dir = 'output'
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            png_path = os.path.join(output_dir, 'distance_vs_fitness.png')
+            plt.savefig(png_path, dpi=150, bbox_inches='tight')
+            print(f'Distance vs fitness plot saved to {png_path}')
+            plt.close()
+        else:
+            plt.show()
+
+    def plot_metrics_evolution(self, save_as_png=True):
+        """
+        Multi-panel line graphs showing how various metrics evolve across generations.
+        """
+        if not self.data.get('analytics_history'):
+            print("No analytics data available for metrics evolution plot.")
+            return
+
+        # Extract data
+        generations = []
+        survival_rates = []
+        top_first_food = []
+        bottom_first_food = []
+        top_first_combat = []
+        bottom_first_combat = []
+        top_food_efficiency = []
+        bottom_food_efficiency = []
+
+        for gen_analytics in self.data['analytics_history']:
+            generations.append(gen_analytics.get('generation', 0))
+            survival_rates.append(gen_analytics.get('survival_rate', 0) * 100)
+
+            top_first_food.append(gen_analytics.get('top_quartile_avg_first_food_turn'))
+            bottom_first_food.append(gen_analytics.get('bottom_quartile_avg_first_food_turn'))
+            top_first_combat.append(gen_analytics.get('top_quartile_avg_first_combat_turn'))
+            bottom_first_combat.append(gen_analytics.get('bottom_quartile_avg_first_combat_turn'))
+            top_food_efficiency.append(gen_analytics.get('top_quartile_food_efficiency', 0))
+            bottom_food_efficiency.append(gen_analytics.get('bottom_quartile_food_efficiency', 0))
+
+        # Create 2x2 subplot
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
+
+        # Plot 1: Survival Rate
+        ax1.plot(generations, survival_rates, 'o-', color='blue', linewidth=2, markersize=6)
+        ax1.set_title('Population Survival Rate', fontweight='bold')
+        ax1.set_xlabel('Generation')
+        ax1.set_ylabel('Survival Rate (%)')
+        ax1.grid(True, alpha=0.3)
+        ax1.set_ylim(0, 100)
+
+        # Plot 2: First Food Turn
+        ax2.plot(generations, top_first_food, 'o-', label='Top Quartile', color='green', linewidth=2, markersize=6)
+        ax2.plot(generations, bottom_first_food, 'o-', label='Bottom Quartile', color='red', linewidth=2, markersize=6)
+        ax2.set_title('Average Turn for First Food Collection', fontweight='bold')
+        ax2.set_xlabel('Generation')
+        ax2.set_ylabel('Turn Number')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        # Plot 3: First Combat Turn
+        ax3.plot(generations, top_first_combat, 'o-', label='Top Quartile', color='green', linewidth=2, markersize=6)
+        ax3.plot(generations, bottom_first_combat, 'o-', label='Bottom Quartile', color='red', linewidth=2, markersize=6)
+        ax3.set_title('Average Turn for First Combat', fontweight='bold')
+        ax3.set_xlabel('Generation')
+        ax3.set_ylabel('Turn Number')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+
+        # Plot 4: Food Efficiency
+        ax4.plot(generations, top_food_efficiency, 'o-', label='Top Quartile', color='green', linewidth=2, markersize=6)
+        ax4.plot(generations, bottom_food_efficiency, 'o-', label='Bottom Quartile', color='red', linewidth=2, markersize=6)
+        ax4.set_title('Food Collection Efficiency (Food/Distance)', fontweight='bold')
+        ax4.set_xlabel('Generation')
+        ax4.set_ylabel('Efficiency Ratio')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+
+        plt.suptitle('Evolutionary Metrics Over Generations', fontsize=16, fontweight='bold', y=1.00)
+        plt.tight_layout()
+
+        if save_as_png:
+            output_dir = 'output'
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            png_path = os.path.join(output_dir, 'metrics_evolution.png')
+            plt.savefig(png_path, dpi=150, bbox_inches='tight')
+            print(f'Metrics evolution plot saved to {png_path}')
+            plt.close()
+        else:
+            plt.show()
+
+    def plot_quartile_comparison_radar(self, generation=None, save_as_png=True):
+        """
+        Radar chart comparing top vs bottom quartile across multiple dimensions.
+        Shows the latest generation by default.
+        """
+        if not self.data.get('analytics_history'):
+            print("No analytics data available for radar chart.")
+            return
+
+        # Use latest generation if not specified
+        if generation is None:
+            generation = len(self.data['analytics_history']) - 1
+
+        if generation >= len(self.data['analytics_history']):
+            print(f"Generation {generation} not found in analytics history.")
+            return
+
+        gen_analytics = self.data['analytics_history'][generation]
+
+        # Define metrics to compare (normalized 0-1)
+        categories = ['Distance\nTraveled', 'Unique\nCells', 'Combat\nRatio',
+                     'Food\nEfficiency', 'Survival\nRate']
+
+        # Extract values
+        top_distance = gen_analytics.get('top_quartile_avg_distance', 0)
+        bottom_distance = gen_analytics.get('bottom_quartile_avg_distance', 0)
+        max_distance = max(top_distance, bottom_distance, 1)
+
+        top_cells = gen_analytics.get('top_quartile_avg_unique_cells', 0)
+        bottom_cells = gen_analytics.get('bottom_quartile_avg_unique_cells', 0)
+        max_cells = max(top_cells, bottom_cells, 1)
+
+        top_combat = gen_analytics.get('top_quartile_combat_ratio', 0)
+        bottom_combat = gen_analytics.get('bottom_quartile_combat_ratio', 0)
+        max_combat = max(top_combat, bottom_combat, 1)
+
+        top_food_eff = gen_analytics.get('top_quartile_food_efficiency', 0)
+        bottom_food_eff = gen_analytics.get('bottom_quartile_food_efficiency', 0)
+        max_food_eff = max(top_food_eff, bottom_food_eff, 1)
+
+        top_survival = gen_analytics.get('top_quartile_survival_rate', 0)
+        bottom_survival = gen_analytics.get('bottom_quartile_survival_rate', 0)
+
+        # Normalize values
+        top_values = [
+            top_distance / max_distance,
+            top_cells / max_cells,
+            top_combat / max_combat,
+            top_food_eff / max_food_eff,
+            top_survival
+        ]
+
+        bottom_values = [
+            bottom_distance / max_distance,
+            bottom_cells / max_cells,
+            bottom_combat / max_combat,
+            bottom_food_eff / max_food_eff,
+            bottom_survival
+        ]
+
+        # Number of variables
+        N = len(categories)
+
+        # Compute angle for each axis
+        angles = [n / float(N) * 2 * np.pi for n in range(N)]
+        top_values += top_values[:1]  # Complete the circle
+        bottom_values += bottom_values[:1]
+        angles += angles[:1]
+
+        # Create plot
+        fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
+
+        # Plot data
+        ax.plot(angles, top_values, 'o-', linewidth=2, label='Top Quartile', color='green')
+        ax.fill(angles, top_values, alpha=0.25, color='green')
+
+        ax.plot(angles, bottom_values, 'o-', linewidth=2, label='Bottom Quartile', color='red')
+        ax.fill(angles, bottom_values, alpha=0.25, color='red')
+
+        # Fix axis to go in the right order
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(categories, fontsize=11)
+
+        # Set y-axis limits
+        ax.set_ylim(0, 1)
+        ax.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
+        ax.set_yticklabels(['20%', '40%', '60%', '80%', '100%'], fontsize=9)
+
+        # Add legend and title
+        ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1), fontsize=12)
+        plt.title(f'Agent Performance Comparison - Generation {generation}\n(Normalized Metrics)',
+                 fontsize=14, fontweight='bold', pad=20)
+
+        plt.tight_layout()
+
+        if save_as_png:
+            output_dir = 'output'
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            png_path = os.path.join(output_dir, f'quartile_comparison_radar_gen_{generation}.png')
+            plt.savefig(png_path, dpi=150, bbox_inches='tight')
+            print(f'Radar chart saved to {png_path}')
+            plt.close()
+        else:
+            plt.show()
+
+    def plot_survival_curve(self, save_as_png=True):
+        """
+        Survival curve showing when agents die across generations (Kaplan-Meier style).
+        """
+        if not self.data.get('analytics_history'):
+            print("No analytics data available for survival curve.")
+            return
+
+        # Extract death turn data
+        generations = []
+        avg_death_turns = []
+
+        for gen_analytics in self.data['analytics_history']:
+            gen = gen_analytics.get('generation', 0)
+            avg_death = gen_analytics.get('avg_death_turn')
+
+            if avg_death is not None:
+                generations.append(gen)
+                avg_death_turns.append(avg_death)
+
+        if not generations:
+            print("No death data available for survival curve.")
+            return
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+
+        ax.plot(generations, avg_death_turns, 'o-', color='darkred', linewidth=2, markersize=8)
+        ax.set_title('Average Death Turn Across Generations', fontsize=14, fontweight='bold')
+        ax.set_xlabel('Generation', fontsize=12)
+        ax.set_ylabel('Average Turn When Agents Die', fontsize=12)
+        ax.grid(True, alpha=0.3)
+
+        # Add reference line at turn 50 (if that's max turns)
+        ax.axhline(y=50, color='gray', linestyle='--', alpha=0.5, label='Max Turns')
+        ax.legend(fontsize=11)
+
+        plt.tight_layout()
+
+        if save_as_png:
+            output_dir = 'output'
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            png_path = os.path.join(output_dir, 'survival_curve.png')
+            plt.savefig(png_path, dpi=150, bbox_inches='tight')
+            print(f'Survival curve saved to {png_path}')
+            plt.close()
+        else:
+            plt.show()
 
 
 if __name__ == "__main__":

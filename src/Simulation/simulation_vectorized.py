@@ -38,6 +38,7 @@ class VectorizedSimulation:
 
     def __init__(
         self,
+        num_generations: int = 20,
         population_size: int = 32,
         batch_size: int = 8,
         turns_per_batch: int = 100,
@@ -53,6 +54,7 @@ class VectorizedSimulation:
         Initialise vectorized simulation.
 
         Args:
+            num_generations: Total number of generations to run
             population_size: Total agents per generation
             batch_size: Agents per batch (8 for 16x16 grid)
             turns_per_batch: Max turns per batch
@@ -68,11 +70,13 @@ class VectorizedSimulation:
         if population_size % batch_size != 0:
             raise ValueError(f"population_size ({population_size}) must be divisible by batch_size ({batch_size})")
 
+        self.num_generations = num_generations
         self.population_size = population_size
         self.batch_size = batch_size
         self.num_batches = population_size // batch_size
         self.turns_per_batch = turns_per_batch
-        self.mutation_strength = mutation_strength
+        self.base_mutation_strength = mutation_strength  # Starting mutation strength
+        self.mutation_strength = mutation_strength  # Current mutation strength (will decay)
         self.num_elites = num_elites
         self.current_generation = 0
         self.initial_noise = initial_noise
@@ -86,8 +90,11 @@ class VectorizedSimulation:
         self.performance_history = []
         self.champion_paths_by_gen = {}  # {gen: {round: [paths]}} - top agents' paths per round
         self.environment_history = {}  # {gen: {round: grid}} - environment per round
+        self.turn_by_turn_history = {}  # {gen: {round: {batch: [turn_states]}}} - full playthrough data
         self.genetic_history = []  # genetic diversity over time
         self.behavioural_history = []  # action distribution over time
+        self.analytics_history = []  # Extended analytics per generation
+        self.percentile_behavioural_history = []  # Percentile-specific behavioral metrics per generation
         self.generation_champions = []  # List of champion agents from each generation (for final tournament)
 
         # Load base model
@@ -205,18 +212,25 @@ class VectorizedSimulation:
         print(f"GENERATION {self.current_generation + 1}")
         print(f"{'='*60}")
 
-        # Initialize cumulative fitness tracking
+        # Initialize fitness tracking
         cumulative_energy = {agent.id: 0.0 for agent in self.population}
-        cumulative_food = {agent.id: 0 for agent in self.population}
-        cumulative_combat = {agent.id: 0 for agent in self.population}
         total_energy_available = 0.0  # Track total energy spawned across rounds
 
-        # Track per-round scores for table display
+        # Track per-round statistics for table display
         round_scores = {agent.id: [] for agent in self.population}  # {agent_id: [round1_energy, round2_energy, ...]}
+        round_food = {agent.id: [] for agent in self.population}  # {agent_id: [round1_food, round2_food, ...]}
+        round_attacks = {agent.id: [] for agent in self.population}  # {agent_id: [round1_attacks, round2_attacks, ...]}
+        round_victims = {agent.id: [] for agent in self.population}  # {agent_id: [round1_victims, round2_victims, ...]}
+        round_deaths = {agent.id: [] for agent in self.population}  # {agent_id: [round1_died, round2_died, ...]}
 
         # Run multiple rounds
         for round_idx in range(self.rounds_per_generation):
             print(f"\n--- Round {round_idx + 1}/{self.rounds_per_generation} ---")
+
+            # Track stats at start of round to calculate per-round deltas
+            round_start_food = {agent.id: agent.food_collected for agent in self.population}
+            round_start_attacks = {agent.id: agent.combat_attacks for agent in self.population}
+            round_start_victims = {agent.id: agent.combat_victims for agent in self.population}
 
             # Reset agents for new round (keep cumulative food/combat stats)
             for agent in self.population:
@@ -251,8 +265,29 @@ class VectorizedSimulation:
                 # Build adapter mapping
                 adapter_mapping = {agent.id: f"adapter_{agent.id}" for agent in batch}
 
+                # Determine if we should record playthrough (only for final generation)
+                is_final_gen = (self.current_generation == self.num_generations - 1)
+                record = is_final_gen
+
                 # Run batch
-                self._run_batch_vectorized(env, batch, adapter_mapping, round_idx)
+                batch_turn_states = self._run_batch_vectorized(
+                    env, batch, adapter_mapping, round_idx,
+                    batch_idx=batch_idx,
+                    record_playthrough=record
+                )
+
+                # Save turn-by-turn data if recorded
+                if batch_turn_states is not None:
+                    gen_str = str(self.current_generation)
+                    round_str = str(round_idx)
+                    batch_str = str(batch_idx)
+
+                    if gen_str not in self.turn_by_turn_history:
+                        self.turn_by_turn_history[gen_str] = {}
+                    if round_str not in self.turn_by_turn_history[gen_str]:
+                        self.turn_by_turn_history[gen_str][round_str] = {}
+
+                    self.turn_by_turn_history[gen_str][round_str][batch_str] = batch_turn_states
 
                 # Sync agent states from environment and accumulate fitness
                 agent_data = env.get_agent_data()
@@ -263,17 +298,29 @@ class VectorizedSimulation:
 
                     agent.sync_from_environment(energy, alive, position)
 
-                    # Accumulate fitness metrics
+                    # Accumulate energy for fitness calculation
                     cumulative_energy[agent.id] += energy
-                    cumulative_food[agent.id] += agent.food_collected
-                    cumulative_combat[agent.id] += (agent.combat_attacks + agent.combat_victims)
+                    # Note: food/combat stats accumulate on agent object across rounds
 
                 stats = env.get_stats()
                 print(f"  Batch {batch_idx + 1} complete: {stats['agents_alive']}/{self.batch_size} alive, {stats['turn']} turns, {stats['food_remaining']} food left")
 
-            # Record scores for this round (after all batches complete)
+            # Record per-round statistics (after all batches complete)
             for agent in self.population:
+                # Energy at end of round
                 round_scores[agent.id].append(agent.energy)
+
+                # Food/combat collected THIS round (delta from start)
+                food_this_round = agent.food_collected - round_start_food[agent.id]
+                attacks_this_round = agent.combat_attacks - round_start_attacks[agent.id]
+                victims_this_round = agent.combat_victims - round_start_victims[agent.id]
+
+                round_food[agent.id].append(food_this_round)
+                round_attacks[agent.id].append(attacks_this_round)
+                round_victims[agent.id].append(victims_this_round)
+
+                # Death status (died if not alive)
+                round_deaths[agent.id].append(not agent.is_alive)
 
             # Track total energy spawned this round
             total_energy_available += env.total_energy_spawned
@@ -305,7 +352,7 @@ class VectorizedSimulation:
         self._calculate_metrics()
 
         # Print tournament score table
-        self._print_tournament_scores(round_scores)
+        self._print_tournament_scores(round_scores, round_food, round_attacks, round_victims, round_deaths)
 
         # Save generation champion (for final tournament)
         champion = self.get_top_agents(n=1)[0]
@@ -325,12 +372,21 @@ class VectorizedSimulation:
 
         self.current_generation += 1
 
+        # Adaptive mutation: decrease mutation strength over generations
+        # Start high for exploration, decrease for exploitation
+        # Decay formula: mutation_strength = base_strength * exp(-decay_rate * generation)
+        decay_rate = 0.02  # Slower decay to maintain exploration longer
+        self.mutation_strength = self.base_mutation_strength * np.exp(-decay_rate * self.current_generation)
+        print(f"Mutation strength for next generation: {self.mutation_strength:.6f} (decay rate: {decay_rate})")
+
     def _run_batch_vectorized(
         self,
         env: VectorizedEnvironment,
         batch: list,
         adapter_mapping: dict,
-        round_idx: int
+        round_idx: int,
+        batch_idx: int = 0,
+        record_playthrough: bool = False
     ):
         """
         Run a batch with vectorized operations.
@@ -340,6 +396,8 @@ class VectorizedSimulation:
             batch: List of agents
             adapter_mapping: {agent_id -> adapter_id}
             round_idx: Current round index (for tracking)
+            batch_idx: Batch index within round
+            record_playthrough: If True, record full turn-by-turn state for animation
         """
         # Update inference engine with current batch's agent brains
         agent_brains = {agent.id: agent.brain for agent in batch}
@@ -347,6 +405,9 @@ class VectorizedSimulation:
 
         # Track recent actions (last 3 moves per agent)
         recent_actions = {}  # {agent_id: [action1, action2, action3]} (most recent last)
+
+        # Initialize playthrough recording if requested
+        turn_states = [] if record_playthrough else None
 
         for turn in range(self.turns_per_batch):
             # Get alive agent indices (vectorized)
@@ -400,7 +461,15 @@ class VectorizedSimulation:
 
                 # Record action and track recent moves (keep last 3)
                 action = response_dict[agent_id]["action"]
-                agent.record_action(action, position)
+                parse_success = response_dict[agent_id]["success"]
+
+                # Record "INVALID" for failed parses, otherwise record the actual action
+                recorded_action = action if parse_success else "INVALID"
+                agent.record_action(recorded_action, position)
+
+                # Update position metrics (track starting position, distance, unique cells)
+                old_pos = agent.position  # Previous position before this action
+                agent.update_position_metrics(position, old_pos, turn)
 
                 if agent_id not in recent_actions:
                     recent_actions[agent_id] = []
@@ -414,11 +483,13 @@ class VectorizedSimulation:
                     victims_to_damage.append(victim_id)
                     combat_victims[victim_id] = position  # Store attacker position for victim
                     agent.record_combat_event(position, is_attacker=True)
+                    agent.record_first_combat(turn)  # Track first combat turn
                     combat_count += 1
 
                 # Handle food
                 elif "food" in result["reason"].lower():
                     agent.record_food_collected(position)
+                    agent.record_first_food(turn)  # Track first food collection turn
                     food_count += 1
 
             # Record combat events for victims
@@ -429,16 +500,24 @@ class VectorizedSimulation:
                     victim_idx = env.agent_ids.index(victim_id)
                     victim_pos = tuple(int(x) for x in env.agent_positions[victim_idx])
                     victim_agent.record_combat_event(victim_pos, is_attacker=False)
+                    victim_agent.record_first_combat(turn)  # Track first combat turn for victims too
 
             # Apply combat damage, metabolism, and environment updates (vectorized)
             if victims_to_damage:
-                env.apply_combat_damage(victims_to_damage, damage=-20)
+                env.apply_combat_damage(victims_to_damage)
 
             # Apply metabolism (VECTORIZED - all agents at once)
             env.apply_metabolism()
 
             # Update alive status (vectorized)
             dead_ids = env.update_alive_status()
+
+            # Record death turns for agents that just died
+            if dead_ids:
+                for dead_id in dead_ids:
+                    dead_agent = next((a for a in batch if a.id == dead_id), None)
+                    if dead_agent:
+                        dead_agent.record_death(turn)
 
             # Environment step (food regrowth)
             env.step()
@@ -458,42 +537,99 @@ class VectorizedSimulation:
             event_str = f" | {', '.join(events)}" if events else ""
             print(f"    Turn {turn + 1:3d}/{self.turns_per_batch}: {alive_count} alive{event_str}")
 
-    def _print_tournament_scores(self, round_scores: dict):
+            # Record turn state for playthrough animation (if requested)
+            if record_playthrough:
+                turn_state = {
+                    "turn": turn,
+                    "grid": self._convert_grid_to_symbolic(env.grid.copy()).tolist(),
+                    "agents": [{
+                        "id": agent.id,
+                        "position": [int(env.agent_positions[i][0]), int(env.agent_positions[i][1])],
+                        "energy": float(env.agent_energies[i]),
+                        "alive": bool(env.agent_alive[i]),
+                        "last_action": agent.get_last_action()
+                    } for i, agent in enumerate(batch)],
+                    "food_collected_this_turn": food_count,
+                    "combat_events_this_turn": combat_count
+                }
+                turn_states.append(turn_state)
+
+        # Return turn states if recording
+        return turn_states if record_playthrough else None
+
+    def _print_tournament_scores(self, round_scores: dict, round_food: dict,
+                                  round_attacks: dict, round_victims: dict, round_deaths: dict):
         """
-        Print a table showing each agent's score in each tournament round.
+        Print a table showing each agent's per-round statistics.
 
         Args:
             round_scores: {agent_id: [round1_energy, round2_energy, ...]}
+            round_food: {agent_id: [round1_food, round2_food, ...]}
+            round_attacks: {agent_id: [round1_attacks, round2_attacks, ...]}
+            round_victims: {agent_id: [round1_victims, round2_victims, ...]}
+            round_deaths: {agent_id: [round1_died, round2_died, ...]}
         """
         if self.rounds_per_generation <= 1:
             return  # No need for table if only 1 round
 
-        print(f"\n{'='*60}")
+        print(f"\n{'='*100}")
         print(f"TOURNAMENT SCORES - GENERATION {self.current_generation + 1}")
-        print(f"{'='*60}")
+        print(f"{'='*100}")
 
         # Sort agents by final average energy
         sorted_agents = sorted(self.population, key=lambda a: a.energy, reverse=True)
 
-        # Print header
+        # Print header - now with per-round breakdown
         header = f"{'Rank':<6} {'Agent ID':<12}"
         for r in range(self.rounds_per_generation):
-            header += f" {'Round ' + str(r+1):>10}"
-        header += f" {'Average':>10} {'Food':>6} {'Attacks':>8} {'Victim':>7}"
+            header += f" {'R' + str(r+1) + ' Enrg':>9}"
+        for r in range(self.rounds_per_generation):
+            header += f" {'R' + str(r+1) + ' Food':>9}"
+        for r in range(self.rounds_per_generation):
+            header += f" {'R' + str(r+1) + ' Atk':>8}"
+        for r in range(self.rounds_per_generation):
+            header += f" {'R' + str(r+1) + ' Vict':>9}"
+        header += f" {'Avg Enrg':>10}"
         print(header)
         print("-" * len(header))
 
-        # Print each agent's scores
+        # Print each agent's per-round stats
         for rank, agent in enumerate(sorted_agents, 1):
-            scores = round_scores[agent.id]
             row = f"{rank:<6} {agent.id:<12}"
-            for score in scores:
-                row += f" {score:>10.1f}"
-            avg = sum(scores) / len(scores) if scores else 0
-            row += f" {avg:>10.1f} {agent.food_collected:>6} {agent.combat_attacks:>8} {agent.combat_victims:>7}"
+
+            # Energy per round (with death indicator)
+            for r in range(self.rounds_per_generation):
+                energy = round_scores[agent.id][r]
+                died = round_deaths[agent.id][r]
+                if died:
+                    row += f" {energy:>7.1f}†"
+                else:
+                    row += f" {energy:>9.1f}"
+
+            # Food per round
+            for r in range(self.rounds_per_generation):
+                food = round_food[agent.id][r]
+                row += f" {food:>9}"
+
+            # Attacks per round
+            for r in range(self.rounds_per_generation):
+                attacks = round_attacks[agent.id][r]
+                row += f" {attacks:>8}"
+
+            # Victims per round
+            for r in range(self.rounds_per_generation):
+                victims = round_victims[agent.id][r]
+                row += f" {victims:>9}"
+
+            # Average energy
+            avg = sum(round_scores[agent.id]) / len(round_scores[agent.id]) if round_scores[agent.id] else 0
+            row += f" {avg:>10.1f}"
+
             print(row)
 
-        print(f"{'='*60}\n")
+        print(f"{'='*100}")
+        print(f"† = Agent died this round | Enrg = Energy | Atk = Attacks | Vict = Times Attacked")
+        print(f"{'='*100}\n")
 
     def _calculate_metrics(self):
         """Calculate and store generation metrics."""
@@ -537,9 +673,10 @@ class VectorizedSimulation:
         elites = self.population[:self.num_elites]
         print(f"Preserving top {self.num_elites} agents")
 
-        # Mating pool
-        mating_pool_size = max(2, self.population_size // 2)
+        # Mating pool - only top 25% can breed (increased selection pressure)
+        mating_pool_size = max(2, self.population_size // 4)
         mating_pool = self.population[:mating_pool_size]
+        print(f"Mating pool: top {mating_pool_size} agents ({mating_pool_size/self.population_size*100:.0f}%)")
 
         # Create offspring
         offspring_needed = self.population_size - self.num_elites
@@ -621,6 +758,14 @@ class VectorizedSimulation:
         action_dist = self._calculate_action_distribution()
         self.behavioural_history.append(action_dist)
 
+        # Calculate and save extended analytics
+        analytics = self._calculate_extended_analytics()
+        self.analytics_history.append(analytics)
+
+        # Calculate and save percentile behavioral metrics
+        percentile_metrics = self._calculate_percentile_behavioural_metrics()
+        self.percentile_behavioural_history.append(percentile_metrics)
+
         # Save weights (top 1 per generation)
         self._save_weights()
 
@@ -685,26 +830,213 @@ class VectorizedSimulation:
 
     def _calculate_action_distribution(self) -> dict:
         """
-        Calculate distribution of actions taken by all agents.
+        Calculate distribution of actions chosen by agents.
+        Only counts deliberate movement actions, not events (food/combat).
 
         Returns:
             Dict of action -> count
         """
+        # Only track deliberate actions (movements chosen by agents)
         action_counts = {
             "MOVE_NORTH": 0,
             "MOVE_SOUTH": 0,
             "MOVE_EAST": 0,
             "MOVE_WEST": 0,
-            "COMBAT": 0,
-            "FOOD_COLLECTED": 0
+            "INVALID": 0  # Failed to parse LLM output
         }
 
         for agent in self.population:
             for action_or_event in agent.action_history:
+                # Only count movement actions and invalid parses
+                # Ignore events like FOOD_COLLECTED, COMBAT_ATTACK, COMBAT_VICTIM
                 if action_or_event in action_counts:
                     action_counts[action_or_event] += 1
 
         return action_counts
+
+    def _calculate_extended_analytics(self) -> dict:
+        """
+        Calculate extended analytics for understanding agent success patterns.
+
+        Returns:
+            Dict with various analytics metrics
+        """
+        # Divide agents into quartiles by fitness
+        sorted_agents = sorted(self.population, key=lambda a: a.energy, reverse=True)
+        q1_size = len(sorted_agents) // 4
+        top_quartile = sorted_agents[:q1_size]
+        bottom_quartile = sorted_agents[-q1_size:]
+
+        def calc_action_ratios(agents):
+            """Calculate action ratios for a group of agents."""
+            total_actions = sum(len(a.action_history) for a in agents)
+            if total_actions == 0:
+                return {}
+
+            action_counts = {"MOVE_NORTH": 0, "MOVE_SOUTH": 0, "MOVE_EAST": 0, "MOVE_WEST": 0, "INVALID": 0}
+            for agent in agents:
+                for action in agent.action_history:
+                    if action in action_counts:
+                        action_counts[action] += 1
+
+            return {k: v / total_actions for k, v in action_counts.items()}
+
+        # Calculate metrics
+        analytics = {
+            "generation": self.current_generation,
+
+            # Starting position analysis
+            "top_quartile_starting_positions": [
+                list(a.starting_position) if a.starting_position else None
+                for a in top_quartile
+            ],
+            "bottom_quartile_starting_positions": [
+                list(a.starting_position) if a.starting_position else None
+                for a in bottom_quartile
+            ],
+
+            # Action patterns by performance
+            "top_quartile_action_ratios": calc_action_ratios(top_quartile),
+            "bottom_quartile_action_ratios": calc_action_ratios(bottom_quartile),
+
+            # Spatial metrics
+            "top_quartile_avg_distance": np.mean([a.total_distance_traveled for a in top_quartile]),
+            "bottom_quartile_avg_distance": np.mean([a.total_distance_traveled for a in bottom_quartile]),
+            "top_quartile_avg_unique_cells": np.mean([len(a.unique_positions_visited) for a in top_quartile]),
+            "bottom_quartile_avg_unique_cells": np.mean([len(a.unique_positions_visited) for a in bottom_quartile]),
+
+            # Temporal metrics
+            "top_quartile_avg_first_food_turn": np.mean([a.first_food_turn for a in top_quartile if a.first_food_turn is not None]) if any(a.first_food_turn is not None for a in top_quartile) else None,
+            "bottom_quartile_avg_first_food_turn": np.mean([a.first_food_turn for a in bottom_quartile if a.first_food_turn is not None]) if any(a.first_food_turn is not None for a in bottom_quartile) else None,
+            "top_quartile_avg_first_combat_turn": np.mean([a.first_combat_turn for a in top_quartile if a.first_combat_turn is not None]) if any(a.first_combat_turn is not None for a in top_quartile) else None,
+            "bottom_quartile_avg_first_combat_turn": np.mean([a.first_combat_turn for a in bottom_quartile if a.first_combat_turn is not None]) if any(a.first_combat_turn is not None for a in bottom_quartile) else None,
+
+            # Survival metrics
+            "survival_rate": sum(1 for a in self.population if a.is_alive) / len(self.population),
+            "top_quartile_survival_rate": sum(1 for a in top_quartile if a.is_alive) / len(top_quartile),
+            "bottom_quartile_survival_rate": sum(1 for a in bottom_quartile if a.is_alive) / len(bottom_quartile),
+            "avg_death_turn": np.mean([a.death_turn for a in self.population if a.death_turn is not None]) if any(a.death_turn is not None for a in self.population) else None,
+
+            # Combat & food efficiency
+            "top_quartile_combat_ratio": np.mean([(a.combat_attacks + a.combat_victims) / max(len(a.action_history), 1) for a in top_quartile]),
+            "bottom_quartile_combat_ratio": np.mean([(a.combat_attacks + a.combat_victims) / max(len(a.action_history), 1) for a in bottom_quartile]),
+            "top_quartile_food_efficiency": np.mean([a.food_collected / max(a.total_distance_traveled, 1) for a in top_quartile]),
+            "bottom_quartile_food_efficiency": np.mean([a.food_collected / max(a.total_distance_traveled, 1) for a in bottom_quartile]),
+        }
+
+        return analytics
+
+    def _calculate_percentile_behavioural_metrics(self) -> dict:
+        """
+        Calculate comprehensive behavioral metrics for different performance percentiles.
+        Tracks how different performance tiers behave across generations.
+
+        Returns:
+            Dict with metrics for top 5%, top 10%, quartiles, and bottom tiers
+        """
+        # Divide agents into performance tiers by fitness
+        sorted_agents = sorted(self.population, key=lambda a: a.energy, reverse=True)
+        n = len(sorted_agents)
+
+        # Calculate tier sizes
+        p5_size = max(1, n // 20)   # Top 5%
+        p10_size = max(1, n // 10)  # Top 10%
+        q_size = max(1, n // 4)     # Quartile (25%)
+
+        tiers = {
+            "top_5pct": sorted_agents[:p5_size],
+            "top_10pct": sorted_agents[:p10_size],
+            "Q1_top_25pct": sorted_agents[:q_size],
+            "Q2_upper_mid": sorted_agents[q_size:2*q_size],
+            "Q3_lower_mid": sorted_agents[2*q_size:3*q_size],
+            "Q4_bottom_25pct": sorted_agents[3*q_size:],
+            "bottom_10pct": sorted_agents[-p10_size:],
+            "bottom_5pct": sorted_agents[-p5_size:],
+        }
+
+        def analyze_tier(agents, tier_name):
+            """Analyze behavior for a performance tier."""
+            if not agents:
+                return None
+
+            # Action distribution
+            total_actions = sum(len(a.action_history) for a in agents)
+            action_counts = {"MOVE_NORTH": 0, "MOVE_SOUTH": 0, "MOVE_EAST": 0, "MOVE_WEST": 0, "INVALID": 0}
+            for agent in agents:
+                for action in agent.action_history:
+                    if action in action_counts:
+                        action_counts[action] += 1
+
+            action_percentages = {k: (v / total_actions * 100) if total_actions > 0 else 0
+                                 for k, v in action_counts.items()}
+
+            # Performance metrics
+            avg_energy = np.mean([a.energy for a in agents])
+            avg_food = np.mean([a.food_collected for a in agents])
+            avg_attacks = np.mean([a.combat_attacks for a in agents])
+            avg_victims = np.mean([a.combat_victims for a in agents])
+
+            # Behavioral metrics
+            avg_distance = np.mean([a.total_distance_traveled for a in agents])
+            avg_unique_cells = np.mean([len(a.unique_positions_visited) for a in agents])
+            survival_rate = sum(1 for a in agents if a.is_alive) / len(agents) * 100
+
+            # Efficiency metrics
+            food_per_distance = np.mean([a.food_collected / max(a.total_distance_traveled, 1) for a in agents])
+            energy_per_action = avg_energy / max(total_actions / len(agents), 1)
+
+            # Combat behavior
+            combat_engagement_rate = sum(1 for a in agents if (a.combat_attacks + a.combat_victims) > 0) / len(agents) * 100
+            avg_combat_ratio = np.mean([(a.combat_attacks + a.combat_victims) / max(len(a.action_history), 1) for a in agents])
+
+            # Aggression vs defensive
+            total_attacks = sum(a.combat_attacks for a in agents)
+            total_victimizations = sum(a.combat_victims for a in agents)
+            aggression_score = (total_attacks - total_victimizations) / max(total_attacks + total_victimizations, 1)
+
+            return {
+                "tier": tier_name,
+                "size": len(agents),
+                "percentile_range": tier_name,  # e.g., "top_5pct", "Q1_top_25pct"
+
+                # Action preferences (%)
+                "move_north_pct": action_percentages["MOVE_NORTH"],
+                "move_south_pct": action_percentages["MOVE_SOUTH"],
+                "move_east_pct": action_percentages["MOVE_EAST"],
+                "move_west_pct": action_percentages["MOVE_WEST"],
+                "invalid_pct": action_percentages["INVALID"],
+
+                # Performance
+                "avg_energy": float(avg_energy),
+                "avg_food": float(avg_food),
+                "avg_attacks": float(avg_attacks),
+                "avg_victims": float(avg_victims),
+
+                # Behavior
+                "avg_distance_traveled": float(avg_distance),
+                "avg_unique_cells_visited": float(avg_unique_cells),
+                "survival_rate_pct": float(survival_rate),
+
+                # Efficiency
+                "food_per_distance": float(food_per_distance),
+                "energy_per_action": float(energy_per_action),
+
+                # Combat style
+                "combat_engagement_rate_pct": float(combat_engagement_rate),
+                "combat_ratio": float(avg_combat_ratio),
+                "aggression_score": float(aggression_score),  # -1 (defensive) to +1 (aggressive)
+            }
+
+        metrics = {
+            "generation": self.current_generation,
+            "population_size": n,
+            "tiers": {
+                name: analyze_tier(agents, name)
+                for name, agents in tiers.items()
+            }
+        }
+
+        return metrics
 
     def _save_weights(self):
         """
@@ -732,8 +1064,11 @@ class VectorizedSimulation:
         viz_data = {
             "champion_paths_by_gen": self.champion_paths_by_gen,
             "environment_history": self.environment_history,
+            "turn_by_turn_history": self.turn_by_turn_history,  # Full playthrough data for final generation
             "genetic_history": self.genetic_history,
             "behavioural_history": self.behavioural_history,
+            "analytics_history": self.analytics_history,  # Extended analytics
+            "percentile_behavioural_history": self.percentile_behavioural_history,  # Percentile-specific behavioral metrics
             "performance_history": self.performance_history,
             "tournament_mode": self.rounds_per_generation > 1,
             "rounds_per_generation": self.rounds_per_generation,
