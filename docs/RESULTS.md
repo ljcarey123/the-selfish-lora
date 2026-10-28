@@ -134,7 +134,38 @@ prisoner's dilemma, where a behaviour flip changes payoff a lot, Countdown
 gives a weak signal per mutation. It needs a much larger evaluation set per
 generation, or an easier task where the base model is nearer 30-50%.
 
+## 6. Self-play: defection persists (the selfish outcome)
+
+Runs `social_evolved_s0` / `social_control_s0`: population 12 playing every
+other genome plus tit-for-tat and always-defect bots, 6 rounds, 15 generations.
+Most of each genome's matches are against other genomes.
+
+| | cooperation, gens 0-14 | mean payoff, last 5 gens | invalid, last 5 gens |
+|---|---|---|---|
+| evolved | 0-15% (ends at 0%) | 1.25 | 5% |
+| control | 0-31% (ends at 6%) | 1.43 | 46% |
+
+- **Evolved:** cooperators appear (15% in generation 1) but are exploited by
+  the defecting majority and selected out; the population stays almost
+  entirely defecting. This is the textbook result: in a population of
+  defectors, a lone cooperator does worse.
+- **Control:** "best" scores reach 3.71, but this is an artefact. Mutations
+  break genomes (68% invalid by the end) and an invalid move counts as
+  cooperation, so the remaining valid defectors score highly by exploiting
+  broken neighbours. A higher mean payoff here reflects that exploitation,
+  not better play.
+
+**Meaning:** together with section 3, the same model and method evolve
+cooperation against reciprocating bots and defection among themselves. The
+social environment, not the model, decides what evolves.
+
 ## Open questions and next ideas
+
+- Self-play with more reciprocating bots, or an initial cluster of
+  cooperators, to test whether cooperation can invade (the classic result
+  is that it needs a threshold of reciprocators).
+- Score invalid moves as defection, or penalise them more, so broken
+  genomes can't be exploited in self-play.
 
 - Random match lengths (e.g. geometric, mean 6) to remove the end-game cue;
   this should leave reciprocity as the only way past 2.00.

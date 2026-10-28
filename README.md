@@ -37,6 +37,9 @@ Full write-up with figures in [docs/RESULTS.md](docs/RESULTS.md). So far:
 - **One seed evolved end-game defection:** cooperate for five rounds, defect
   from round 6, the last round of every match, although the model was told
   the length was unknown.
+- **Self-play keeps everyone selfish:** when genomes mostly play each other,
+  cooperators that appear are exploited and selected out, so the population
+  stays defecting. The social environment, not the model, decides what evolves.
 - **Reciprocity (tit-for-tat) has not evolved:** reactive strategies are rare
   among mutants, and the few seen had the wrong sign.
 - **Countdown:** no improvement over the control at this budget; fitness is
