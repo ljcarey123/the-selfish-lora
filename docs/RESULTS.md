@@ -128,6 +128,8 @@ noise (about ±2.4 points on 100 puzzles). Both runs' fitness spikes at
 generation 9, when the shared puzzle batch happened to be easy, so batch
 difficulty dominates the fitness signal.
 
+**Status: paused** (2026-10-28) to focus on the prisoner's dilemma.
+
 **Meaning:** with 24 puzzles, one extra correct answer moves fitness by 0.04,
 so selection mostly picks the luckiest genome (winner's curse). Unlike the
 prisoner's dilemma, where a behaviour flip changes payoff a lot, Countdown
@@ -158,6 +160,24 @@ Most of each genome's matches are against other genomes.
 **Meaning:** together with section 3, the same model and method evolve
 cooperation against reciprocating bots and defection among themselves. The
 social environment, not the model, decides what evolves.
+
+## 7. Setup fixes (2026-10-28)
+
+Changes prompted by sections 3-6. Results above were produced before them.
+
+- **Unparseable moves count as defection** (and still score 0 for their
+  player). Previously they counted as cooperation, which let working
+  defectors exploit broken genomes (section 6's control).
+- **Optional weight decay** (`--weight-decay`): each child is pulled a
+  fraction of the way back to the base genome before mutation, bounding the
+  build-up of mutations. Elites are copied unchanged. With mutation std 0.02
+  and decay 0.15, per-element drift levels off around 0.02 / sqrt(1 - 0.85^2)
+  = 0.038, inside the range where mutants change behaviour but stay valid.
+- **Random match lengths** (`--rounds-max`): each generation's length is
+  drawn uniformly from [rounds, rounds-max], removing the fixed last round
+  that seed 1 exploited (section 4).
+
+The base model still defects in every history after the prompt change.
 
 ## Open questions and next ideas
 

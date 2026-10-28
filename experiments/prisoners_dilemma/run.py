@@ -4,6 +4,8 @@ Evolve LoRA adapters that play the iterated prisoner's dilemma.
 Each generation is a round-robin tournament: every genome plays every other
 genome, plus a few fixed-strategy bots (tit-for-tat, always-defect, ...).
 Fitness is a genome's average payoff per round across all its matches.
+With --rounds-max, each generation's match length is drawn uniformly from
+[--rounds, --rounds-max], so there is no fixed last round to exploit.
 
     python experiments/prisoners_dilemma/run.py --generations 30 --run-name evolved_s0
     python experiments/prisoners_dilemma/run.py --generations 30 --run-name control_s0 --control
@@ -31,7 +33,7 @@ from selfish_lora.generate import generate
 from selfish_lora.runlog import RunLog, make_run_dir, plot_runs
 from selfish_lora.checkpoint import save_checkpoint, load_checkpoint, restore_rng
 
-from game import BOTS, DEFECT, INVALID, SYSTEM_PROMPT, build_prompt, parse_move, score_round
+from game import BOTS, DEFECT, SYSTEM_PROMPT, build_prompt, parse_move, score_round
 
 
 def play_tournament(model, tokenizer, population, bot_names, rounds, batch_size, self_play=True):
@@ -83,8 +85,8 @@ def play_tournament(model, tokenizer, population, bot_names, rounds, batch_size,
             pay_a, pay_b = score_round(move_a, move_b)
             payoffs[m["a"]].append(pay_a)
             payoffs[m["b"]].append(pay_b)
-            m["moves"][m["a"]].append(move_a or INVALID)
-            m["moves"][m["b"]].append(move_b or INVALID)
+            m["moves"][m["a"]].append(move_a or DEFECT)
+            m["moves"][m["b"]].append(move_b or DEFECT)
 
     return matches, payoffs, invalid
 
@@ -134,12 +136,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--generations", type=int, default=30)
     parser.add_argument("--population", type=int, default=16)
-    parser.add_argument("--rounds", type=int, default=8, help="Rounds per match")
+    parser.add_argument("--rounds", type=int, default=8, help="Rounds per match (minimum if --rounds-max)")
+    parser.add_argument("--rounds-max", type=int, help="Draw each generation's match length from [rounds, this]")
     parser.add_argument("--bots", default="tft,alld", help=f"Comma-separated from {list(BOTS)}, or ''")
     parser.add_argument("--self-play", action=argparse.BooleanOptionalAction, default=True,
                         help="Genomes play each other as well as the bots (--no-self-play: bots only)")
     parser.add_argument("--mutation-std", type=float, default=0.02, help="Noise added to each child")
     parser.add_argument("--initial-std", type=float, default=0.03, help="Noise used to diversify generation 0")
+    parser.add_argument("--weight-decay", type=float, default=0.0,
+                        help="Pull each child this fraction of the way back to the base genome")
     parser.add_argument("--lora-rank", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--control", action="store_true", help="Random selection baseline")
@@ -154,7 +159,10 @@ def main():
         print(f"Run already finished: {run_dir}")
         return
     if ckpt:
-        args = argparse.Namespace(**ckpt["args"])  # Saved settings win on resume
+        # Saved settings win on resume; defaults fill options added since the run started
+        args = argparse.Namespace(**{**vars(parser.parse_args([])), **ckpt["args"]})
+    if args.rounds_max is not None and args.rounds_max < args.rounds:
+        parser.error("--rounds-max must be at least --rounds")
 
     bot_names = [b for b in args.bots.split(",") if b]
     unknown = set(bot_names) - set(BOTS)
@@ -162,13 +170,14 @@ def main():
         parser.error(f"Unknown bots: {unknown}")
 
     cfg = EvolutionConfig(population_size=args.population, mutation_std=args.mutation_std,
-                          initial_std=args.initial_std)
+                          initial_std=args.initial_std, weight_decay=args.weight_decay)
     start = ckpt["next_generation"] if ckpt else 0
     log = RunLog(run_dir, {**vars(args), "evolution": cfg.to_dict()}, start_generation=start)
 
     # Seed after loading: load_model reseeds torch to fix the shared A matrices
     model, tokenizer = load_model(lora_rank=args.lora_rank)
     device = next(model.parameters()).device
+    base = genome_from_model(model, genome_keys(model))
 
     if ckpt:
         load_genome(model, ckpt["fixed"])
@@ -178,13 +187,14 @@ def main():
         random.seed(args.seed)
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
-        population = initial_population(genome_from_model(model, genome_keys(model)), cfg)
+        population = initial_population(base, cfg)
     fixed = genome_from_model(model, fixed_keys(model))
     genome_ids = list(range(len(population)))
 
     for gen in range(start, args.generations):
+        rounds = random.randint(args.rounds, args.rounds_max) if args.rounds_max else args.rounds
         matches, payoffs, invalid = play_tournament(model, tokenizer, population, bot_names,
-                                                    args.rounds, args.batch_size, args.self_play)
+                                                    rounds, args.batch_size, args.self_play)
         fitness = [float(np.mean(payoffs[g])) for g in genome_ids]
         best = int(np.argmax(fitness))
 
@@ -193,6 +203,7 @@ def main():
             "invalid_rate": sum(invalid.values()) / sum(len(payoffs[g]) for g in genome_ids),
             "diversity": mean_pairwise_distance(population),
             "best_norm": genome_norm(population[best]),
+            "rounds": rounds,
         }
         for b in bot_names:
             extra[f"{b}_payoff"] = float(np.mean(payoffs[b]))
@@ -202,7 +213,7 @@ def main():
             save_genome(population[best], os.path.join(run_dir, "best.pt"))
             save_checkpoint(run_dir, vars(args), gen + 1, population, fixed, done=True)
         else:
-            population = next_generation(population, fitness, cfg, control=args.control)
+            population = next_generation(population, fitness, cfg, control=args.control, base=base)
             save_checkpoint(run_dir, vars(args), gen + 1, population, fixed)
 
     plot_runs([run_dir], [tag], os.path.join(run_dir, "fitness.png"),

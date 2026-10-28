@@ -2,14 +2,14 @@
 Iterated prisoner's dilemma: prompts, move parsing, payoffs and fixed-strategy bots.
 
 Standard payoffs (T=5 > R=3 > P=1 > S=0). The number of rounds is not shown
-to the agents, so there is no known last round to defect on.
+to the agents. An unparseable completion is played as D and scores 0 for its
+player, so broken genomes can be neither exploited nor rewarded.
 """
 
 import random
 import re
 
 COOPERATE, DEFECT = "C", "D"
-INVALID = "?"  # Recorded in history when a completion has no parseable move
 
 # (my payoff, their payoff) indexed by (my move, their move)
 PAYOFFS = {
@@ -29,7 +29,6 @@ RULES = (
     "- You D, they C: you get 5, they get 0\n"
     "- Both D: you get 1, they get 1\n"
     "The game lasts an unknown number of rounds. Your goal is to score as many points as possible.\n"
-    "A ? in the history means that player gave no valid move (it counts as C, but they scored 0).\n"
 )
 
 _MOVE_PATTERN = re.compile(r"\b(C|D|cooperate|defect)\b", re.IGNORECASE)
@@ -58,10 +57,10 @@ def parse_move(text: str) -> str | None:
 
 def score_round(move_a: str | None, move_b: str | None) -> tuple[float, float]:
     """
-    Payoffs for one round. An invalid move (None) is played as C but its
-    player scores 0, so emitting gibberish is never better than cooperating.
+    Payoffs for one round. An invalid move (None) is played as D, so the
+    opponent cannot exploit it, and its own player scores 0 for that round.
     """
-    pay_a, pay_b = PAYOFFS[(move_a or COOPERATE, move_b or COOPERATE)]
+    pay_a, pay_b = PAYOFFS[(move_a or DEFECT, move_b or DEFECT)]
     return (0 if move_a is None else pay_a), (0 if move_b is None else pay_b)
 
 

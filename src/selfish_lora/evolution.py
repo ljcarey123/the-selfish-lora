@@ -24,6 +24,8 @@ class EvolutionConfig:
     mutation_std: float = 0.05      # Std of Gaussian noise added to every element
     initial_std: float = 0.05       # Std of noise used to diversify generation 0
     crossover: bool = True          # Uniform crossover; False = mutate one parent only
+    weight_decay: float = 0.0       # Fraction of each child's distance from the base genome removed
+                                    # before mutation; bounds the build-up of mutations over generations
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -47,6 +49,7 @@ def next_generation(
     fitness: list[float],
     cfg: EvolutionConfig,
     control: bool = False,
+    base: Genome | None = None,
 ) -> list[Genome]:
     """
     Breed the next generation from scored genomes.
@@ -56,10 +59,13 @@ def next_generation(
         fitness: One score per genome (higher is better)
         cfg: Evolution settings
         control: If True, rank genomes randomly instead of by fitness
+        base: Genome that weight decay pulls children towards (required if cfg.weight_decay > 0)
 
     Returns:
         New population of the same size
     """
+    if cfg.weight_decay > 0 and base is None:
+        raise ValueError("weight_decay needs the base genome")
     if control:
         order = list(np.random.permutation(len(population)))
     else:
@@ -77,6 +83,8 @@ def next_generation(
         else:
             child = {k: v.clone() for k, v in random.choice(parents).items()}
         for k in child:
+            if cfg.weight_decay > 0:
+                child[k] = base[k] + (1 - cfg.weight_decay) * (child[k] - base[k])
             child[k] += torch.randn_like(child[k]) * cfg.mutation_std
         children.append(child)
 
