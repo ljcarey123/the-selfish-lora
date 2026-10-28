@@ -179,6 +179,46 @@ Changes prompted by sections 3-6. Results above were produced before them.
 
 The base model still defects in every history after the prompt change.
 
+## 8. Batch A: tit-for-tat does not evolve; agents ignore the opponent
+
+Plan `batch_a_reciprocity`: bots tft + alld only (no self-play), match length
+drawn from 4-10 once per generation, weight decay 0.15, population 16, 25
+generations, 3 seeds each of evolved and control. At length 7, tit-for-tat
+scores about 1.93, always-cooperate 1.50, always-defect 1.29.
+
+![Batch A](figures/pd_batch_a.png)
+
+Averages over the last 8 generations:
+
+| run | mean payoff | cooperation | invalid | avg gap, coop vs tft minus vs alld |
+|---|---|---|---|---|
+| evolved s0 | 1.39 | 0.43 | 0.05 | 0.013 |
+| evolved s1 | 1.38 | 0.54 | 0.06 | 0.014 |
+| evolved s2 | 1.48 | 0.53 | 0.00 | 0.013 |
+| control s0 | 1.18 | 0.18 | 0.17 | 0.007 |
+| control s1 | 1.20 | 0.05 | 0.07 | 0.012 |
+| control s2 | 1.19 | 0.19 | 0.12 | 0.017 |
+
+- **Weight decay worked:** the best genome's norm levels off at about 11.9
+  (it reached 27 without decay) and evolved runs end with 0-6% invalid moves.
+- **Selection still beats the control** on payoff (1.38-1.48 vs 1.18-1.20)
+  and cooperation, in all three seeds.
+- **No reciprocity:** populations cooperate equally with tit-for-tat and with
+  always-defect (gap about 1 point). The best genomes are always-cooperate
+  (seeds 0 and 1) and "cooperate for two rounds, then defect" (seed 2): a
+  third round-counting strategy, and no strategy that reads the opponent.
+- **Design flaw:** one length per generation flips the best strategy
+  between generations (short games reward early defection, long games
+  reward cooperation), so selection chases the draw. Fixed afterwards with
+  `--lengths-per-gen`: every pairing is played at several lengths each
+  generation and fitness averages per match.
+
+**Meaning:** across five evolved seeds (sections 3, 4 and 8), weight-noise
+evolution of this LoRA finds strategies keyed to the round number, never
+to the opponent's moves. Next question: can this LoRA represent
+tit-for-tat at all (a representation limit), or can evolution just not
+find it (a search limit)?
+
 ## Open questions and next ideas
 
 - Self-play with more reciprocating bots, or an initial cluster of

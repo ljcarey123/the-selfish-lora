@@ -1,0 +1,133 @@
+{
+ "runs": [
+  {
+   "experiment": "prisoners_dilemma",
+   "name": "recip_evolved_s0",
+   "args": [
+    "--no-self-play",
+    "--bots",
+    "tft,alld",
+    "--population",
+    "16",
+    "--generations",
+    "25",
+    "--rounds",
+    "4",
+    "--rounds-max",
+    "10",
+    "--weight-decay",
+    "0.15",
+    "--seed",
+    "0"
+   ]
+  },
+  {
+   "experiment": "prisoners_dilemma",
+   "name": "recip_control_s0",
+   "args": [
+    "--no-self-play",
+    "--bots",
+    "tft,alld",
+    "--population",
+    "16",
+    "--generations",
+    "25",
+    "--rounds",
+    "4",
+    "--rounds-max",
+    "10",
+    "--weight-decay",
+    "0.15",
+    "--seed",
+    "0",
+    "--control"
+   ]
+  },
+  {
+   "experiment": "prisoners_dilemma",
+   "name": "recip_evolved_s1",
+   "args": [
+    "--no-self-play",
+    "--bots",
+    "tft,alld",
+    "--population",
+    "16",
+    "--generations",
+    "25",
+    "--rounds",
+    "4",
+    "--rounds-max",
+    "10",
+    "--weight-decay",
+    "0.15",
+    "--seed",
+    "1"
+   ]
+  },
+  {
+   "experiment": "prisoners_dilemma",
+   "name": "recip_control_s1",
+   "args": [
+    "--no-self-play",
+    "--bots",
+    "tft,alld",
+    "--population",
+    "16",
+    "--generations",
+    "25",
+    "--rounds",
+    "4",
+    "--rounds-max",
+    "10",
+    "--weight-decay",
+    "0.15",
+    "--seed",
+    "1",
+    "--control"
+   ]
+  },
+  {
+   "experiment": "prisoners_dilemma",
+   "name": "recip_evolved_s2",
+   "args": [
+    "--no-self-play",
+    "--bots",
+    "tft,alld",
+    "--population",
+    "16",
+    "--generations",
+    "25",
+    "--rounds",
+    "4",
+    "--rounds-max",
+    "10",
+    "--weight-decay",
+    "0.15",
+    "--seed",
+    "2"
+   ]
+  },
+  {
+   "experiment": "prisoners_dilemma",
+   "name": "recip_control_s2",
+   "args": [
+    "--no-self-play",
+    "--bots",
+    "tft,alld",
+    "--population",
+    "16",
+    "--generations",
+    "25",
+    "--rounds",
+    "4",
+    "--rounds-max",
+    "10",
+    "--weight-decay",
+    "0.15",
+    "--seed",
+    "2",
+    "--control"
+   ]
+  }
+ ]
+}
