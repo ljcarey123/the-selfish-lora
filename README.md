@@ -102,3 +102,9 @@ pip install -r requirements.txt
 ```
 
 Put `HF_TOKEN=...` in `.env` at the repo root if your model needs it.
+
+## Future work
+
+A possible follow-on, in a separate repository, would study these dynamics
+in a spatial world with resources: [docs/NEXT_PROJECT.md](docs/NEXT_PROJECT.md).
+It is a proposal only and not part of this project.

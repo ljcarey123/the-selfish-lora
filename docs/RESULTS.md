@@ -219,6 +219,27 @@ to the opponent's moves. Next question: can this LoRA represent
 tit-for-tat at all (a representation limit), or can evolution just not
 find it (a search limit)?
 
+## 9. Tit-for-tat is representable: evolution's limit is search
+
+`experiments/prisoners_dilemma/train_reference.py --strategy tft --batch 4
+--steps 300 --lr 5e-4`: the same LoRA (rank 4, q/v, same fixed A matrices),
+B matrices trained by gradient descent on tit-for-tat's move for random
+histories of up to 9 rounds.
+
+- Loss reached ~0 within 100 steps. The genome agrees with tit-for-tat on
+  100% of held-out histories up to 9 rounds and 100% up to 15 rounds (longer
+  than any it was trained on), with every move valid. Its fingerprint is
+  textbook tit-for-tat.
+- **Its norm is 2.0**, against about 9 for random generation-0 mutants and
+  about 12 for evolved genomes.
+
+**Meaning:** tit-for-tat is not just representable, it sits much closer to
+the base model than anything evolution produced. Evolution misses it because
+it is one specific direction among 98k parameters and Gaussian noise
+almost never points that way. The bottleneck is the search, not the
+representation. This genome is saved as `runs/reference_tft/best.pt`
+(regenerate with the command above) and used as the reciprocator in Batch B.
+
 ## Open questions and next ideas
 
 - Self-play with more reciprocating bots, or an initial cluster of
