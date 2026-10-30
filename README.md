@@ -26,7 +26,7 @@ experiments/
 legacy/gridworld/          the original 16x16 gridworld project (see its README)
 ```
 
-## Status (2026-10-27)
+## Status (2026-10-30)
 
 Full write-up with figures in [docs/RESULTS.md](docs/RESULTS.md). So far:
 
@@ -40,8 +40,15 @@ Full write-up with figures in [docs/RESULTS.md](docs/RESULTS.md). So far:
 - **Self-play keeps everyone selfish:** when genomes mostly play each other,
   cooperators that appear are exploited and selected out, so the population
   stays defecting. The social environment, not the model, decides what evolves.
-- **Reciprocity (tit-for-tat) has not evolved:** reactive strategies are rare
-  among mutants, and the few seen had the wrong sign.
+- **Reciprocity (tit-for-tat) has not evolved** in five seeds: evolution
+  finds round-counting strategies, never ones that react to the opponent.
+- **But tit-for-tat is easy to represent:** trained by gradient descent into
+  the same LoRA, it is perfect and sits far closer to the base model (norm
+  2.0) than evolved genomes (about 12). The limit is search, not capacity.
+- **Seeded tit-for-tat invades, then drifts away:** four copies take over a
+  defecting population in one generation, but once everyone cooperates,
+  selection cannot tell reciprocators from pushovers; mutation erodes the
+  strategy and defectors return within about ten generations.
 - **Countdown:** no improvement over the control at this budget; fitness is
   dominated by which puzzles each generation draws.
 

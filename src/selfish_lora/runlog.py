@@ -122,7 +122,7 @@ def plot_runs(run_dirs: list[str], labels: list[str], out_path: str, title: str 
             ax = axes[i] if panels else axes[0]
             style = "-" if panels else LINE_STYLES[i]
             ax.plot(gens, [r.get(metric, float("nan")) for r in history], color=color, linewidth=2,
-                    linestyle=style, label=label if panels else f"{label} {metric}")
+                    linestyle=style, label=label if panels or len(metrics) == 1 else f"{label} {metric}")
 
     for i, ax in enumerate(axes):
         ax.set_facecolor(SURFACE)

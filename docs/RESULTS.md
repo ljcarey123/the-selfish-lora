@@ -240,7 +240,64 @@ almost never points that way. The bottleneck is the search, not the
 representation. This genome is saved as `runs/reference_tft/best.pt`
 (regenerate with the command above) and used as the reciprocator in Batch B.
 
+## 10. Batch B: seeded tit-for-tat takes over, then drifts away
+
+Plan `batch_b_invasion`: self-play only (no bots), population 12, 15
+generations, two match lengths from 4-10 per generation, weight decay 0.15.
+Generation 0 is the usual noisy population with N members replaced by exact
+copies of a seed genome: the gradient-trained tit-for-tat (section 9) or the
+always-cooperate genome from Batch A. The classic expectation is that
+always-cooperate can never invade defectors, and tit-for-tat can once it has
+enough copies to meet itself often.
+
+![Batch B](figures/pd_invasion.png)
+
+Cooperation rate (share of C moves):
+
+| run | gen 0 | peak | last 5 gens | final best genome |
+|---|---|---|---|---|
+| no seed s0 / s1 | 0.00 / 0.28 | 0.22 / 0.28 | 0.06 / 0.08 | always-defect |
+| 4x always-cooperate s0 / s1 | 0.30 / 0.48 | 0.32 / 0.48 | 0.08 / 0.07 | always-defect |
+| 1x tit-for-tat s0 / s1 | 0.01 / 0.31 | 0.25 / 0.31 | 0.06 / 0.08 | always-defect |
+| 2x tit-for-tat s0 / s1 | 0.03 / 0.32 | 0.45 / 0.32 | 0.08 / 0.08 | always-defect |
+| 4x tit-for-tat s0 | 0.12 | **1.00** (gen 1) | 0.04 | always-defect |
+| 2x tit-for-tat, random selection s0 | 0.03 | 0.42 | 0.18 | always-defect |
+
+- **Always-cooperate dies out**, as expected: exploited in generation 0,
+  gone within a few generations.
+- **One or two tit-for-tat copies are not enough.** In generation 0 the
+  base genome (always-defect) was the best scorer in every run except 4x
+  tit-for-tat. In seed 1 the tit-for-tat copies were not picked as parents
+  at all, so the 1x, 2x and no-seed runs share their random draws and
+  produce identical populations from generation 1 onwards.
+- **Four copies invade completely.** In generation 1 every genome
+  cooperated and every genome scored exactly 3.00 (mutual cooperation).
+- **Then cooperation drifts away.** With everyone scoring 3.00, selection
+  cannot tell a reciprocator from an unconditional cooperator, so mutation
+  wanders freely. The genome norm jumps from 2.0 (tit-for-tat) to 8.4 in one
+  generation: mutation noise per generation (std 0.02 over 98k parameters,
+  norm about 6) is three times the size of the whole tit-for-tat adapter, and
+  weight decay pulls each child towards the base model, which always defects.
+  Defectors reappear in generation 2, cooperation is near zero by generation
+  10, and every final best genome fingerprints as always-defect.
+- The random-selection control ending highest (0.18) is drift, not a
+  result: selection here pushes towards defection.
+
+**Meaning:** the invasion threshold behaves as theory predicts (1-2 copies
+fail, 4 take over), but cooperation is not stable. This mirrors the known
+cycle in evolutionary game theory where tit-for-tat drifts neutrally towards
+always-cooperate, which defectors then invade. Here two features of the
+setup speed it up: mutation steps much larger than the strategy itself, and
+a decay term that pulls towards the defecting base model. Single seeds per
+condition (two for some), so treat the magnitudes as indicative.
+
 ## Open questions and next ideas
+
+- Mutation scaled to the strategy (std ~0.005, so a step is smaller than the
+  tit-for-tat adapter), or decay towards the seed genome instead of the
+  base, to test whether invaded cooperation then persists.
+- Keep a few bots (e.g. always-defect) in the tournament after invasion, so
+  reciprocity stays visible to selection and does not drift.
 
 - Self-play with more reciprocating bots, or an initial cluster of
   cooperators, to test whether cooperation can invade (the classic result
