@@ -334,10 +334,58 @@ alone can maintain cooperation needs an anchor that is not a strategy
 (e.g. no decay with very small mutations, or decay towards the population
 mean).
 
+## 12. Batch D: without decay, selection alone maintains tit-for-tat
+
+Plan `batch_d_no_decay`: the Batch C setup (4x tit-for-tat in a self-play
+population of 12, mutation std 0.005) with no weight decay, so nothing pulls
+the population towards any strategy. 20 generations, 4 seeds with fitness
+selection and 1 random-selection control. Fingerprints cover every genome in
+each final population, not just the best.
+
+![Batch D](figures/pd_no_decay.png)
+
+| run | gen 0 cooperation | gen 0 top scorer | cooperation, gens 1-19 | final population |
+|---|---|---|---|---|
+| s0 | 0.12 | tit-for-tat | 1.00 throughout | 12/12 tit-for-tat |
+| s1 | 0.34 | base (always-defect) | 0.04 → 0.00 | 12/12 always-defect |
+| s2 | 0.14 | tit-for-tat | 1.00 (0.92 at gen 9) | 11/12 tit-for-tat, 1 at 95% |
+| s3 | 0.15 | tit-for-tat | 1.00 throughout | 12/12 tit-for-tat |
+| control s0 | 0.12 | (random) | 0.00-0.42, ends 0.00 | 12/12 always-defect |
+
+- **Selection maintains reciprocity on its own.** In 3 of 4 seeds, the
+  seeded tit-for-tat took over in one generation and held for 19, while
+  the control from the same start lost it. 35 of 36 final genomes are exact
+  tit-for-tat; the other differs on 1 of 21 histories, towards defection.
+- **Behaviour is robust to large weight drift.** With no decay the best
+  genome's norm grows steadily from 2.0 to about 7.0, yet the strategy is
+  unchanged. Once fixed, the strategy sits in a broad region of weight
+  space, not on a knife edge.
+- **No drift to always-cooperate**, against the classic expectation for a
+  population where reciprocity is never tested. In seed 2 a defecting
+  mutant appeared at generation 9 (cooperation 0.92, retaliation 1.00) and
+  was eliminated the next generation: the population resisted an invasion.
+- **Generation 0 decides the outcome.** Where a tit-for-tat copy topped
+  generation 0, it won; where the base model did (seed 1), tit-for-tat left
+  no offspring. Seed 1's generation 0 had the most cooperative background
+  (0.34 vs 0.12-0.15): unconditional cooperators feed defectors more than
+  reciprocators, letting always-defect outscore tit-for-tat. Seeds 1 and 3
+  drew the same match lengths, so length is not the explanation. (One
+  failing seed, so this is a hypothesis.)
+
+**Meaning:** together with Batch C, this separates the forces. Mutation
+noise at a sensible scale does not destroy a strategy; decay towards the
+base model does, because the base model is a defector. Without that pull,
+fitness selection keeps a reciprocating population stable against drift and
+invading mutants, where random selection does not. The open problem from
+section 9 remains: evolution can maintain tit-for-tat, but not discover it.
+
 ## Open questions and next ideas
 
-- Keep cooperation without a strategic anchor: no weight decay with
-  mutation std ~0.005, or decay towards the population mean.
+- Measure the invasion threshold properly: 2, 3, 4 and 6 copies with no
+  decay, several seeds each, and test whether a cooperative generation-0
+  background makes invasion harder.
+- Decay towards the population mean: bounds drift without favouring any
+  strategy.
 - Keep a few bots (e.g. always-defect) in the tournament after invasion, so
   reciprocity stays visible to selection and does not drift.
 

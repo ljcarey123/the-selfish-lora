@@ -43,6 +43,8 @@ def describe(history: tuple[list[str], list[str]]) -> str:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dirs", nargs="*", help="Run directories (relative to this folder or absolute)")
+    parser.add_argument("--population", action="store_true",
+                        help="Fingerprint every genome in each run's last checkpoint instead of best.pt")
     args = parser.parse_args()
 
     model, tokenizer = load_model()
@@ -56,8 +58,13 @@ def main():
 
     players = {"base": genome_from_model(model, genome_keys(model))}
     for run_dir in args.run_dirs:
-        players[os.path.basename(run_dir.rstrip("/\\"))] = load_genome_file(
-            os.path.join(HERE, run_dir, "best.pt"), device)
+        name = os.path.basename(run_dir.rstrip("/\\"))
+        if args.population:
+            population = load_checkpoint(os.path.join(HERE, run_dir))["population"]
+            for i, genome in enumerate(population):
+                players[f"{name}#{i}"] = {k: v.to(device) for k, v in genome.items()}
+        else:
+            players[name] = load_genome_file(os.path.join(HERE, run_dir, "best.pt"), device)
 
     hs = histories()
     prompts = [build_prompt(mine, theirs) for mine, theirs in hs]

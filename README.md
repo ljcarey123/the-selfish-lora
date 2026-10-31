@@ -54,6 +54,12 @@ Full write-up with figures in [docs/RESULTS.md](docs/RESULTS.md). So far:
   decay towards tit-for-tat keeps genuine reciprocity in every run, but a
   random-selection control ends there too. Selection changes the timing,
   the anchor decides the destination.
+- **Without decay, selection alone maintains reciprocity:** in 3 of 4
+  seeds, seeded tit-for-tat took over and held for 19 generations (35 of 36
+  final genomes exact tit-for-tat, despite weights drifting to 3.5x the
+  original norm), and even expelled an invading defector. The
+  random-selection control lost it. Evolution can keep tit-for-tat, but
+  not find it.
 - **Countdown:** no improvement over the control at this budget; fitness is
   dominated by which puzzles each generation draws.
 
