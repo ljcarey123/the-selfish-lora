@@ -291,11 +291,53 @@ setup speed it up: mutation steps much larger than the strategy itself, and
 a decay term that pulls towards the defecting base model. Single seeds per
 condition (two for some), so treat the magnitudes as indicative.
 
+## 11. Batch C: the decay anchor, not selection, decides what survives
+
+Plan `batch_c_stability`: the Batch B 4x tit-for-tat setup with mutation
+std 0.005 instead of 0.02, so a mutation step (norm about 1.6) is smaller
+than the tit-for-tat adapter (norm 2.0). New option `--decay-to seed` makes
+weight decay pull each child towards the seed genome instead of the base
+model. Because that pull acts on everyone, a random-selection control is
+essential.
+
+![Batch C](figures/pd_stability.png)
+
+| run | decay pulls to | selection | cooperation, gens 1 / 5 / 14 | final best genome |
+|---|---|---|---|---|
+| s0 | base | fitness | 1.00 / 0.09 / 0.00 | always-defect |
+| s0 | tit-for-tat | fitness | 1.00 / 1.00 / 1.00 | tit-for-tat (100%) |
+| s1 | tit-for-tat | fitness | 0.00 / 0.10 / 1.00 | tit-for-tat (100%) |
+| s0 | tit-for-tat | random | 0.17 / 0.10 / 1.00 | tit-for-tat (100%) |
+
+- **Smaller mutations do not save tit-for-tat when decay pulls to the base.**
+  The population cooperated fully for two generations (one more than in
+  Batch B), then collapsed to always-defect by generation 8. The base model
+  is an always-defect attractor, and decay drags every child towards it.
+- **With decay towards tit-for-tat, every run ends as tit-for-tat**, and the
+  fingerprints confirm real reciprocity (retaliates after a defection,
+  forgives after cooperation), not drift to always-cooperate. Small
+  mutations leave the strategy intact (final norm about 3.6 vs 2.0).
+- **But the random-selection control gets there too**, two generations
+  after seed 1. Selection only helped where tit-for-tat survived generation
+  0 (seed 0: full cooperation from generation 1). In seed 1 the base model
+  scored best in generation 0, no tit-for-tat copy was chosen, and selection
+  initially pushed towards defection (cooperation 0.00 vs 0.17 in the
+  control).
+
+**Meaning:** in this setup the anchor that weight decay pulls towards
+decides the long-run strategy. Selection shifts the timing: it speeds
+invasion when reciprocators get a foothold and resists it when they do not.
+Weight decay is usually treated as a neutral regulariser, but here it is
+the strongest force acting on the strategy, because the "neutral" point
+(the base model) is itself a strategy. A fair test of whether selection
+alone can maintain cooperation needs an anchor that is not a strategy
+(e.g. no decay with very small mutations, or decay towards the population
+mean).
+
 ## Open questions and next ideas
 
-- Mutation scaled to the strategy (std ~0.005, so a step is smaller than the
-  tit-for-tat adapter), or decay towards the seed genome instead of the
-  base, to test whether invaded cooperation then persists.
+- Keep cooperation without a strategic anchor: no weight decay with
+  mutation std ~0.005, or decay towards the population mean.
 - Keep a few bots (e.g. always-defect) in the tournament after invasion, so
   reciprocity stays visible to selection and does not drift.
 

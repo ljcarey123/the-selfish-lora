@@ -49,6 +49,11 @@ Full write-up with figures in [docs/RESULTS.md](docs/RESULTS.md). So far:
   defecting population in one generation, but once everyone cooperates,
   selection cannot tell reciprocators from pushovers; mutation erodes the
   strategy and defectors return within about ten generations.
+- **Weight decay's anchor decides the outcome:** decay towards the base
+  model (an always-defector) erodes tit-for-tat even with small mutations;
+  decay towards tit-for-tat keeps genuine reciprocity in every run, but a
+  random-selection control ends there too. Selection changes the timing,
+  the anchor decides the destination.
 - **Countdown:** no improvement over the control at this budget; fitness is
   dominated by which puzzles each generation draws.
 

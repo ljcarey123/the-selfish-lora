@@ -163,6 +163,8 @@ def main():
     parser.add_argument("--seed-count", type=int, default=0, help="Exact copies of --seed-genome in generation 0")
     parser.add_argument("--weight-decay", type=float, default=0.0,
                         help="Pull each child this fraction of the way back to the base genome")
+    parser.add_argument("--decay-to", choices=["base", "seed"], default="base",
+                        help="Weight decay target: the base model, or --seed-genome")
     parser.add_argument("--lora-rank", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--control", action="store_true", help="Random selection baseline")
@@ -183,6 +185,8 @@ def main():
         parser.error("--rounds-max must be at least --rounds")
     if args.seed_count and not args.seed_genome:
         parser.error("--seed-count needs --seed-genome")
+    if args.decay_to == "seed" and not args.seed_genome:
+        parser.error("--decay-to seed needs --seed-genome")
 
     bot_names = [b for b in args.bots.split(",") if b]
     unknown = set(bot_names) - set(BOTS)
@@ -215,6 +219,7 @@ def main():
                                              for _ in range(args.seed_count)]
     fixed = genome_from_model(model, fixed_keys(model))
     genome_ids = list(range(len(population)))
+    decay_target = load_genome_file(args.seed_genome, device) if args.decay_to == "seed" else base
 
     for gen in range(start, args.generations):
         if args.rounds_max:
@@ -241,7 +246,7 @@ def main():
             save_genome(population[best], os.path.join(run_dir, "best.pt"))
             save_checkpoint(run_dir, vars(args), gen + 1, population, fixed, done=True)
         else:
-            population = next_generation(population, fitness, cfg, control=args.control, base=base)
+            population = next_generation(population, fitness, cfg, control=args.control, base=decay_target)
             save_checkpoint(run_dir, vars(args), gen + 1, population, fixed)
 
     plot_runs([run_dir], [tag], os.path.join(run_dir, "fitness.png"),
