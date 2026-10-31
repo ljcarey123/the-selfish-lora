@@ -7,6 +7,33 @@ git); plans in `experiments/plans/`.
 Model: Qwen2.5-0.5B-Instruct (bf16), LoRA r=4 on q_proj/v_proj, only B
 matrices evolved (98k parameters per genome). Hardware: RTX 3050 Ti laptop, 4 GB.
 
+## Summary
+
+1. **Selection steers behaviour.** Against a panel of fixed bots, evolution
+   turns the base model's always-defect into cooperation and prevents
+   mutational meltdown (sections 3, 8).
+2. **The social environment decides what evolves.** Against reciprocating
+   bots cooperation evolves; in self-play the population stays selfish
+   (sections 3, 6).
+3. **Evolution finds tricks, not reciprocity.** Five seeds found strategies
+   keyed to the round number (including end-game defection), never to the
+   opponent's moves (sections 2, 4, 8).
+4. **Tit-for-tat is easy to represent.** Gradient-trained into the same
+   LoRA, it is perfect and close to the base model: the limit is search,
+   not capacity (section 9).
+5. **Seeded tit-for-tat invades at the predicted threshold.** One or two
+   copies fail; four take over a defecting population in one generation
+   (section 10).
+6. **Weight decay's anchor decides what survives.** Decay towards the base
+   model (itself an always-defector) destroys tit-for-tat; decay towards
+   tit-for-tat preserves it even without selection (section 11).
+7. **Without decay, selection alone maintains reciprocity.** In 3 of 4
+   seeds tit-for-tat held for 19 generations and expelled an invading
+   defector; the random-selection control lost it (section 12).
+8. **Countdown:** no improvement at this budget (section 5, paused).
+
+How this relates to prior work: [Related work](#related-work).
+
 ---
 
 ## 1. Mutation size calibration (2026-10-27)
@@ -291,6 +318,11 @@ setup speed it up: mutation steps much larger than the strategy itself, and
 a decay term that pulls towards the defecting base model. Single seeds per
 condition (two for some), so treat the magnitudes as indicative.
 
+*Update after sections 11-12:* the decay term is the main cause. With the
+same mutation size and no decay, tit-for-tat holds; and no population was
+seen passing through always-cooperate on its way to defection, so "neutral
+drift" is not established here.
+
 ## 11. Batch C: the decay anchor, not selection, decides what survives
 
 Plan `batch_c_stability`: the Batch B 4x tit-for-tat setup with mutation
@@ -379,30 +411,85 @@ fitness selection keeps a reciprocating population stable against drift and
 invading mutants, where random selection does not. The open problem from
 section 9 remains: evolution can maintain tit-for-tat, but not discover it.
 
+## Related work
+
+**Evolution of strategies in the iterated prisoner's dilemma.** Tit-for-tat
+won Axelrod's computer tournaments, and Axelrod's genetic algorithm over
+lookup-table strategies evolved tit-for-tat-like rules from scratch
+([Axelrod 1987](https://public.websites.umich.edu/~axe/research/Evolving.pdf)).
+Later work showed a mix of strategies usually survives rather than
+tit-for-tat alone. Reciprocators need a threshold share of the population to
+invade defectors (Axelrod & Hamilton 1981), tit-for-tat acts as a catalyst
+that later gives way to more forgiving strategies
+([Nowak & Sigmund 1992](https://www.nature.com/articles/355250a0)), and
+under mutation, populations can cycle between cooperation and defection
+(Imhof, Fudenberg & Nowak 2005).
+
+*Here:* the invasion threshold (1-2 copies fail, 4 succeed), the one-step
+takeover and the elimination of unconditional cooperators all reappear.
+Unlike in lookup tables, tit-for-tat is never discovered from scratch: in
+LoRA weight space, random perturbations almost never produce behaviour that
+depends on the opponent's moves.
+
+**LLMs in the iterated prisoner's dilemma.**
+- *LLMs as players or strategy writers.*
+  [Payne & Alloui-Cros 2025](https://arxiv.org/abs/2507.02618) entered
+  frontier LLMs into evolutionary tournaments against classic strategies.
+  [Willis et al. 2025](https://arxiv.org/abs/2501.16173) had LLMs write
+  complete strategies and simulated how populations of them evolve. Code
+  evolution with LLMs ([ICLR 2026 submission](https://iclr.cc/virtual/2026/10018208))
+  refines LLM-written strategy programs over generations. In all of these
+  the LLM plays, writes or judges strategies; its weights are not what evolves.
+- *Training LLM weights by gradient.*
+  [Tennant, Hailes & Musolesi (ICLR 2025)](https://arxiv.org/abs/2410.01639)
+  fine-tune LLM agents with PPO and moral intrinsic rewards in the iterated
+  prisoner's dilemma and show they can unlearn selfish play.
+  [Learning Robust Social Strategies with LLMs (2025)](https://arxiv.org/abs/2511.19405)
+  reports that standard multi-agent RL tends towards defection, and that
+  LLMs fine-tuned with an opponent-shaping method (Advantage Alignment)
+  learn tit-for-tat. Opponent shaping (LOLA) was also what first produced
+  tit-for-tat in self-play with small networks.
+- *Populations of LoRA adapters.* The closest architecture is
+  [PopuLoRA (2026)](https://arxiv.org/abs/2605.16727): teacher and student
+  LoRA adapters on one frozen base model, co-trained by reinforcement
+  learning in reasoning self-play (not a social dilemma). A
+  [`populora` package](https://pypi.org/project/populora/) of the same name
+  evolves LoRA populations with selection, crossover and mutation.
+
+*Here:* we evolve the LLM's own weights (LoRA B matrices) by selection
+alone, with no gradients, in a social game. As far as we are aware this
+combination has not been reported. The results parallel the gradient
+literature: like naive multi-agent RL, plain selection does not find
+tit-for-tat, but it can maintain it once present (section 12). The finding
+we have not seen discussed is the anchor effect (section 11): for a
+fine-tuned LLM there is no strategically neutral point in weight space,
+because the base model already plays a strategy. Weight decay towards it is
+therefore a strong bias towards the base model's behaviour, not a neutral
+regulariser.
+
+This is not a systematic literature review; claims of novelty mean "we are
+not aware of prior work", not "none exists".
+
+## Limitations
+
+- One model (Qwen2.5-0.5B-Instruct) and one prompt format.
+- Small populations (12-16) and short runs (15-25 generations).
+- Few seeds per condition (1-4); magnitudes are indicative.
+- Strategies are fingerprinted on histories of up to two rounds, so
+  differences that only show up later in a match would be missed.
+
 ## Open questions and next ideas
 
-- Measure the invasion threshold properly: 2, 3, 4 and 6 copies with no
-  decay, several seeds each, and test whether a cooperative generation-0
-  background makes invasion harder.
-- Decay towards the population mean: bounds drift without favouring any
-  strategy.
-- Keep a few bots (e.g. always-defect) in the tournament after invasion, so
-  reciprocity stays visible to selection and does not drift.
-
-- Self-play with more reciprocating bots, or an initial cluster of
-  cooperators, to test whether cooperation can invade (the classic result
-  is that it needs a threshold of reciprocators).
-- Score invalid moves as defection, or penalise them more, so broken
-  genomes can't be exploited in self-play.
-
-- Random match lengths (e.g. geometric, mean 6) to remove the end-game cue;
-  this should leave reciprocity as the only way past 2.00.
-- Countdown: 128+ puzzles per generation (cost scales linearly), or a
-  task the base model half-solves, before concluding anything about it.
-
-- Weight decay towards the base genome each generation, to bound mutation
-  load (tests whether the invalid-rate drift goes away).
-- More exploration once converged: larger population, fewer elites, or
-  fitness sharing / novelty for behaviourally distinct genomes.
-- Stronger pressure for reciprocity: a panel of tft + alld only makes
-  tit-for-tat's advantage over always-cooperate 0.42 instead of 0.28.
+- **Invasion threshold:** 2, 3, 4 and 6 tit-for-tat copies with no decay,
+  several seeds each, testing whether a more cooperative generation-0
+  background makes invasion harder (seed 1 in section 12).
+- **Neutral regularisation:** decay towards the population mean, which
+  bounds drift without favouring any strategy.
+- **Longer horizons:** do reciprocating populations eventually drift to
+  always-cooperate and get invaded, as the classic theory predicts?
+- **Discovery:** what would let selection find reciprocity from scratch?
+  Candidates: mutation in a low-dimensional subspace, crossover with
+  gradient-trained genomes, or fitness sharing for behaviourally distinct
+  genomes.
+- **Countdown:** 128+ puzzles per generation, or a task the base model
+  half-solves, before concluding anything about single-agent skills.
