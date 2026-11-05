@@ -19,7 +19,7 @@ An evolutionary simulation that evolves intelligent agent behaviours using **vec
 
 ```bash
 # Clone repository
-git clone https://github.com/your-username/the-selfish-lora.git
+git clone https://github.com/ljcarey123/the-selfish-lora.git
 cd the-selfish-lora
 
 # Install dependencies
@@ -251,7 +251,7 @@ If you use this project in your research, please cite:
   title={The Selfish LoRA: Evolutionary LLM Agents with Vectorised Batch Inference},
   author={Your Name},
   year={2024},
-  url={https://github.com/your-username/the-selfish-lora}
+  url={https://github.com/ljcarey123/the-selfish-lora}
 }
 ```
 
