@@ -7,6 +7,9 @@ git); plans in `experiments/plans/`.
 Model: Qwen2.5-0.5B-Instruct (bf16), LoRA r=4 on q_proj/v_proj, only B
 matrices evolved (98k parameters per genome). Hardware: RTX 3050 Ti laptop, 4 GB.
 
+New to the terms (tit-for-tat, genome, control, weight decay)? See
+[Key terms](../README.md#key-terms) in the README.
+
 ## Summary
 
 1. **Selection steers behaviour.** Against a panel of fixed bots, evolution
@@ -25,11 +28,13 @@ matrices evolved (98k parameters per genome). Hardware: RTX 3050 Ti laptop, 4 GB
    copies fail; four take over a defecting population in one generation
    (section 10).
 6. **Weight decay's anchor decides what survives.** Decay towards the base
-   model (itself an always-defector) destroys tit-for-tat; decay towards
-   tit-for-tat preserves it even without selection (section 11).
-7. **Without decay, selection alone maintains reciprocity.** In 3 of 4
-   seeds tit-for-tat held for 19 generations and expelled an invading
-   defector; the random-selection control lost it (section 12).
+   model (itself an always-defector) destroyed tit-for-tat in all 3 seeds;
+   decay towards tit-for-tat preserves it even without selection
+   (sections 11, 13).
+7. **Without decay, selection alone maintains reciprocity.** Tit-for-tat
+   held for 19 generations in all 3 seeds where it started as the top
+   scorer; with random selection it was lost in all 4 seeds
+   (sections 12, 13).
 8. **Countdown:** no improvement at this budget (section 5, paused).
 
 How this relates to prior work: [Related work](#related-work).
@@ -330,7 +335,8 @@ std 0.005 instead of 0.02, so a mutation step (norm about 1.6) is smaller
 than the tit-for-tat adapter (norm 2.0). New option `--decay-to seed` makes
 weight decay pull each child towards the seed genome instead of the base
 model. Because that pull acts on everyone, a random-selection control is
-essential.
+essential. The figure also includes the two decay-to-base seeds added in
+section 13.
 
 ![Batch C](figures/pd_stability.png)
 
@@ -354,7 +360,11 @@ essential.
   0 (seed 0: full cooperation from generation 1). In seed 1 the base model
   scored best in generation 0, no tit-for-tat copy was chosen, and selection
   initially pushed towards defection (cooperation 0.00 vs 0.17 in the
-  control).
+  control). This control result is close to automatic: pulling every
+  genome towards tit-for-tat each generation drags the population there
+  whatever selection does.
+- *Added later (section 13):* decay towards the base model, repeated on
+  seeds 2 and 3, collapsed to always-defect in the same way.
 
 **Meaning:** in this setup the anchor that weight decay pulls towards
 decides the long-run strategy. Selection shifts the timing: it speeds
@@ -372,7 +382,8 @@ Plan `batch_d_no_decay`: the Batch C setup (4x tit-for-tat in a self-play
 population of 12, mutation std 0.005) with no weight decay, so nothing pulls
 the population towards any strategy. 20 generations, 4 seeds with fitness
 selection and 1 random-selection control. Fingerprints cover every genome in
-each final population, not just the best.
+each final population, not just the best. The figure also includes the three
+random-selection controls added in section 13.
 
 ![Batch D](figures/pd_no_decay.png)
 
@@ -386,7 +397,8 @@ each final population, not just the best.
 
 - **Selection maintains reciprocity on its own.** In 3 of 4 seeds, the
   seeded tit-for-tat took over in one generation and held for 19, while
-  the control from the same start lost it. 35 of 36 final genomes are exact
+  the control from the same start lost it. (Random-selection controls for
+  seeds 1-3 were added later and also lost it; section 13.) 35 of 36 final genomes are exact
   tit-for-tat; the other differs on 1 of 21 histories, towards defection.
 - **Behaviour is robust to large weight drift.** With no decay the best
   genome's norm grows steadily from 2.0 to about 7.0, yet the strategy is
@@ -395,7 +407,8 @@ each final population, not just the best.
 - **No drift to always-cooperate**, against the classic expectation for a
   population where reciprocity is never tested. In seed 2 a defecting
   mutant appeared at generation 9 (cooperation 0.92, retaliation 1.00) and
-  was eliminated the next generation: the population resisted an invasion.
+  was eliminated the next generation: in this seed, the population resisted
+  an invasion.
 - **Generation 0 decides the outcome.** Where a tit-for-tat copy topped
   generation 0, it won; where the base model did (seed 1), tit-for-tat left
   no offspring. Seed 1's generation 0 had the most cooperative background
@@ -410,6 +423,40 @@ base model does, because the base model is a defector. Without that pull,
 fitness selection keeps a reciprocating population stable against drift and
 invading mutants, where random selection does not. The open problem from
 section 9 remains: evolution can maintain tit-for-tat, but not discover it.
+
+## 13. Batch E: repeating the key controls (2026-11-04)
+
+Plan `batch_e_robustness`. Sections 11 and 12 each rested on a single
+comparison run. Batch E repeats them on more seeds, with no other
+changes. Runs with the same seed start from the same generation-0
+population, so each row compares like with like.
+
+**Without decay: fittest parents vs random parents** (the section 12 setup)
+
+| seed | tit-for-tat top in gen 0? | fittest parents: final population | random parents: cooperation, gens 1-19 | random parents: final population |
+|---|---|---|---|---|
+| s0 | yes | 12/12 tit-for-tat | 0.00-0.42 | 12/12 always-defect |
+| s2 | yes | 11/12 tit-for-tat | 0.09-0.37 | mixed, no tit-for-tat |
+| s3 | yes | 12/12 tit-for-tat | 0.00-0.21 | mostly always-defect |
+| s1 | no | 12/12 always-defect | 0.09-0.51 | mostly always-defect |
+
+No genome in any random-parent population matches tit-for-tat on more than
+71% of short histories.
+
+**Decay towards the base model** (the section 11 setup, tit-for-tat top in
+gen 0 in every seed)
+
+| seed | cooperation, gens 1 / 2 / 3 / 4 / 14 | final population |
+|---|---|---|
+| s0 | 1.00 / 1.00 / 0.74 / 0.17 / 0.00 | always-defect |
+| s2 | 1.00 / 1.00 / 0.45 / 0.16 / 0.00 | 12/12 always-defect |
+| s3 | 1.00 / 1.00 / 1.00 / 0.30 / 0.00 | 12/12 always-defect |
+
+**Meaning:** both findings hold. When tit-for-tat starts with a foothold,
+selection keeps it (3 of 3 seeds) and random parents lose it (3 of 3).
+Decay towards the base model destroys it every time, within about 8
+generations, even though it took over first. The only difference from
+the section 12 runs is the decay, so the decay causes the collapse.
 
 ## Related work
 
@@ -474,7 +521,8 @@ not aware of prior work", not "none exists".
 
 - One model (Qwen2.5-0.5B-Instruct) and one prompt format.
 - Small populations (12-16) and short runs (15-25 generations).
-- Few seeds per condition (1-4); magnitudes are indicative.
+- Few seeds per condition (1-4); magnitudes are indicative. The two
+  headline comparisons (sections 12-13) have 3-4 seeds each.
 - Strategies are fingerprinted on histories of up to two rounds, so
   differences that only show up later in a match would be missed.
 

@@ -1,81 +1,83 @@
 # The Selfish LoRA
 
-Can natural selection, acting directly on an LLM's weights, produce
-cooperation? Each agent is a LoRA "genome" on a shared base model
-(Qwen2.5-0.5B-Instruct). Agents play the iterated prisoner's dilemma, the
-fittest breed (crossover and mutation), and the loop repeats. No gradients:
-selection is the only learning signal.
+Can evolution teach a language model to cooperate? This project breeds AI
+agents by natural selection and watches which strategies appear when they
+play a classic cooperation game against each other.
 
-A small research project sized for a 4 GB laptop GPU; each run takes under
-about an hour. Full write-up with figures: [docs/RESULTS.md](docs/RESULTS.md).
+Every agent is the same small language model (Qwen2.5-0.5B-Instruct) plus
+its own small set of extra weights, which act as its "genome". Agents play
+the iterated prisoner's dilemma. The highest scorers become parents: their
+genomes are mixed and randomly mutated to make the next generation. There
+is no gradient training. Selection is the only thing that changes the agents.
+
+It runs on a 4 GB laptop GPU, and each run takes under an hour or so. Full
+write-up with figures: [docs/RESULTS.md](docs/RESULTS.md).
+
+## Key terms
+
+- **Iterated prisoner's dilemma:** two players repeatedly choose to
+  *cooperate* or *defect*. Both cooperating earns 3 points each; both
+  defecting earns 1 each; a defector facing a cooperator earns 5 and the
+  cooperator 0. Defecting wins any single round, but mutual cooperation
+  pays more over many rounds.
+- **Tit-for-tat:** cooperate first, then copy the opponent's last move. A
+  simple, famous strategy that rewards cooperation and punishes defection.
+- **Always-defect:** never cooperate. The unmodified model plays this.
+- **Genome (LoRA adapter):** about 98,000 extra numbers added to the
+  model's weights. Different genomes make the model play differently.
+- **Control run:** the same setup, but parents are picked at random instead
+  of by score. It shows what happens by chance alone.
+- **Weight decay:** each generation, every new genome is pulled part of the
+  way back towards a fixed reference genome, so random mutations can't pile
+  up forever.
+- **Seed:** the random starting point of a run. Repeating a result on
+  several seeds shows it isn't luck.
 
 ## Findings
 
-![Tit-for-tat maintained by selection](docs/figures/pd_no_decay.png)
+![Tit-for-tat survives when the fittest breed, not with random parents](docs/figures/pd_no_decay.png)
 
-- **Selection steers behaviour.** Against fixed bots, evolution turns the
-  base model's always-defect into cooperation; with random selection,
-  accumulated mutations break nearly all outputs (mutational meltdown).
-- **The social environment decides what evolves.** Against reciprocating
-  bots cooperation evolves; in self-play the population stays selfish.
-- **Evolution finds tricks, not reciprocity.** Across five seeds it found
-  strategies keyed to the round number (one cooperated for five rounds and
-  defected in the last), never ones that react to the opponent.
-- **Yet tit-for-tat is easy to represent.** Trained by gradient descent into
-  the same LoRA, it is perfect and sits far closer to the base model (norm
-  2.0) than evolved genomes (about 12). The limit is search, not capacity.
-- **Seeded tit-for-tat invades at a threshold.** One or two copies in a
-  defecting population of 12 fail; four take over in one generation.
-- **Weight decay's anchor decides what survives.** Decay towards the base
-  model, itself an always-defector, destroys tit-for-tat; decay towards
-  tit-for-tat preserves it even under random selection.
-- **Without decay, selection alone maintains reciprocity.** In 3 of 4 seeds
-  tit-for-tat held for 19 generations (35 of 36 final genomes exact
-  tit-for-tat, despite weights drifting to 3.5x their original norm) and
-  expelled an invading defector. The random-selection control lost it.
-- **Countdown** (arithmetic puzzles): no improvement over the control at
-  this budget, so that experiment is paused.
+1. **Selection changes behaviour.** Against fixed opponent bots, evolution
+   turns the model's always-defect into cooperation. In control runs,
+   mutations pile up until the model's replies stop making sense.
+2. **The opponents decide what evolves.** Against bots that reward
+   cooperation, cooperation evolves. When agents play only each other, they
+   stay selfish.
+3. **Evolution finds tricks, not tit-for-tat.** In five runs it found
+   strategies that count rounds (one cooperated for five rounds, then
+   defected in the last), never ones that react to the opponent.
+4. **Yet tit-for-tat is easy for the model to learn.** Trained directly
+   with gradient descent, the same small genome plays perfect tit-for-tat,
+   with far smaller weight changes than evolution makes. Evolution's
+   problem is finding it, not representing it.
+5. **Tit-for-tat needs enough company.** Planted among 12 defecting agents,
+   1 or 2 copies die out; 4 copies take over in a single generation.
+6. **Selection keeps tit-for-tat once it has a foothold.** With no weight
+   decay, it held for 19 generations in all 3 seeds where it started as the
+   top scorer. In control runs it was lost in all 4 seeds.
+7. **What weight decay pulls towards decides the outcome.** Pulling genomes
+   back towards the original model, itself an always-defector, destroyed
+   tit-for-tat in all 3 seeds within about 8 generations. Pulling towards
+   tit-for-tat keeps it, even in control runs.
+8. **Countdown** (a second task, arithmetic puzzles): no improvement over
+   the control, so it is paused.
 
-In short: **selection on LLM weights can keep tit-for-tat, but did not find
-it**, and for a fine-tuned LLM there is no strategically neutral point in
-weight space, because the base model already plays a strategy.
+**In short:** selection on a language model's weights can keep cooperation
+going, but did not discover it. And there is no neutral starting point: the
+original model already plays a strategy (always-defect), so anything that
+pulls towards it pulls towards that strategy.
 
-Caveats: one small model, populations of 12-16, 1-4 seeds per condition.
+Limits: one small model, populations of 12-16, 1-4 seeds per condition.
 
-## Relation to existing work
+## Related work
 
-The classic dynamics reproduced here (tit-for-tat's strength, invasion
-thresholds, unconditional cooperators being exploited) come from
-evolutionary game theory: Axelrod's tournaments and his genetic algorithm
-over lookup-table strategies, which did evolve tit-for-tat-like rules from
-scratch ([Axelrod 1987](https://public.websites.umich.edu/~axe/research/Evolving.pdf)),
-and [Nowak & Sigmund 1992](https://www.nature.com/articles/355250a0).
-
-LLM work on the iterated prisoner's dilemma takes three main routes:
-
-- **LLMs as players or strategy writers.** Frontier LLMs entered into
-  evolutionary tournaments against classic strategies
-  ([Payne & Alloui-Cros 2025](https://arxiv.org/abs/2507.02618)); LLMs
-  writing complete strategies whose populations then evolve
-  ([Willis et al. 2025](https://arxiv.org/abs/2501.16173)). The model's
-  weights do not change.
-- **Gradient fine-tuning of LLM weights.** PPO with moral rewards lets LLM
-  agents unlearn selfish play
-  ([Tennant, Hailes & Musolesi, ICLR 2025](https://arxiv.org/abs/2410.01639)).
-  Standard multi-agent RL tends towards defection, while LLMs fine-tuned
-  with opponent shaping learn tit-for-tat
-  ([Learning Robust Social Strategies with LLMs, 2025](https://arxiv.org/abs/2511.19405)).
-- **Populations of LoRA adapters.** [PopuLoRA (2026)](https://arxiv.org/abs/2605.16727)
-  co-trains teacher and student LoRAs on one base model with RL, for
-  reasoning rather than social dilemmas.
-
-This project instead evolves the LLM's weights by selection alone, in a
-social game. We are not aware of prior work doing this. The results echo
-the gradient literature (plain optimisation does not find tit-for-tat) and
-add a weight-space observation: regularising towards the base model is not
-neutral, because the base model is itself a player. Details and further
-references: [docs/RESULTS.md, Related work](docs/RESULTS.md#related-work).
-This is not a systematic review.
+Evolving prisoner's dilemma strategies is an old idea: in the 1980s
+Axelrod's genetic algorithm evolved tit-for-tat-like rules from scratch.
+Recent work uses language models as players or strategy writers, or
+trains their weights with reinforcement learning. As far as we know,
+evolving a language model's own weights by selection alone in a social
+game hasn't been reported. References and details:
+[docs/RESULTS.md, Related work](docs/RESULTS.md#related-work).
 
 ## Layout
 
@@ -100,10 +102,8 @@ experiments/
   run_queue.py             run a plan, resuming after interruptions
 
 docs/RESULTS.md            results log, related work, limitations
-legacy/gridworld/          the original 16x16 gridworld project (see its README)
+legacy/gridworld/          the original gridworld project, with its docs (archived)
 ```
-
-The other files in `docs/` describe the legacy gridworld project.
 
 ## The two experiments
 
