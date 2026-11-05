@@ -74,9 +74,11 @@ Limits: one small model, populations of 12-16, 1-4 seeds per condition.
 Evolving prisoner's dilemma strategies is an old idea: in the 1980s
 Axelrod's genetic algorithm evolved tit-for-tat-like rules from scratch.
 Recent work uses language models as players or strategy writers, or
-trains their weights with reinforcement learning. As far as we know,
-evolving a language model's own weights by selection alone in a social
-game hasn't been reported. References and details:
+trains their weights with reinforcement learning. The closest method,
+[PopuLoRA](https://arxiv.org/abs/2605.16727), also mutates and crosses
+LoRA weights, but alongside gradient training and for coding tasks. As far
+as we know, evolving a language model's own weights by selection alone in
+a social game hasn't been reported. References and details:
 [docs/RESULTS.md, Related work](docs/RESULTS.md#related-work).
 
 ## Layout

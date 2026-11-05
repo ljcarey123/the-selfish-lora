@@ -462,11 +462,12 @@ the section 12 runs is the decay, so the decay causes the collapse.
 
 **Evolution of strategies in the iterated prisoner's dilemma.** Tit-for-tat
 won Axelrod's computer tournaments, and Axelrod's genetic algorithm over
-lookup-table strategies evolved tit-for-tat-like rules from scratch
+lookup-table strategies, playing against a fixed set of tournament
+entries, evolved tit-for-tat-like rules from scratch
 ([Axelrod 1987](https://public.websites.umich.edu/~axe/research/Evolving.pdf)).
 Later work showed a mix of strategies usually survives rather than
-tit-for-tat alone. Reciprocators need a threshold share of the population to
-invade defectors (Axelrod & Hamilton 1981), tit-for-tat acts as a catalyst
+tit-for-tat alone. A lone reciprocator cannot invade defectors, but a
+cluster that mostly meets itself can (Axelrod & Hamilton 1981), tit-for-tat acts as a catalyst
 that later gives way to more forgiving strategies
 ([Nowak & Sigmund 1992](https://www.nature.com/articles/355250a0)), and
 under mutation, populations can cycle between cooperation and defection
@@ -483,25 +484,30 @@ depends on the opponent's moves.
   [Payne & Alloui-Cros 2025](https://arxiv.org/abs/2507.02618) entered
   frontier LLMs into evolutionary tournaments against classic strategies.
   [Willis et al. 2025](https://arxiv.org/abs/2501.16173) had LLMs write
-  complete strategies and simulated how populations of them evolve. Code
-  evolution with LLMs ([ICLR 2026 submission](https://iclr.cc/virtual/2026/10018208))
-  refines LLM-written strategy programs over generations. In all of these
+  complete strategies and simulated how populations of them evolve.
+  [Li & Wang (ICLR 2026 workshop)](https://iclr.cc/virtual/2026/10018208)
+  have an LLM write strategy programs and refine them over generations of
+  game tournaments. In all of these
   the LLM plays, writes or judges strategies; its weights are not what evolves.
 - *Training LLM weights by gradient.*
   [Tennant, Hailes & Musolesi (ICLR 2025)](https://arxiv.org/abs/2410.01639)
   fine-tune LLM agents with PPO and moral intrinsic rewards in the iterated
   prisoner's dilemma and show they can unlearn selfish play.
   [Learning Robust Social Strategies with LLMs (2025)](https://arxiv.org/abs/2511.19405)
-  reports that standard multi-agent RL tends towards defection, and that
-  LLMs fine-tuned with an opponent-shaping method (Advantage Alignment)
-  learn tit-for-tat. Opponent shaping (LOLA) was also what first produced
-  tit-for-tat in self-play with small networks.
-- *Populations of LoRA adapters.* The closest architecture is
-  [PopuLoRA (2026)](https://arxiv.org/abs/2605.16727): teacher and student
-  LoRA adapters on one frozen base model, co-trained by reinforcement
-  learning in reasoning self-play (not a social dilemma). A
-  [`populora` package](https://pypi.org/project/populora/) of the same name
-  evolves LoRA populations with selection, crossover and mutation.
+  reports that standard multi-agent RL with LLMs drifts towards defection,
+  and that LLMs fine-tuned with an opponent-shaping method (Advantage
+  Alignment) learn tit-for-tat-like play in the iterated prisoner's
+  dilemma. An earlier opponent-shaping method, LOLA, learned tit-for-tat
+  with small networks.
+- *Populations of LoRA adapters.* The closest method is
+  [PopuLoRA (2026)](https://arxiv.org/abs/2605.16727): a population of
+  teacher and student LoRA adapters on one frozen base model, trained with
+  reinforcement learning on code-reasoning self-play. Every few training
+  steps the worst-rated adapters are replaced by mutation and crossover of
+  the best ones' weights, so it combines gradients with weight-space
+  evolution, for reasoning rather than a social dilemma. A
+  [`populora` package](https://pypi.org/project/populora/) implements its
+  population and evolution operators.
 
 *Here:* we evolve the LLM's own weights (LoRA B matrices) by selection
 alone, with no gradients, in a social game. As far as we are aware this
