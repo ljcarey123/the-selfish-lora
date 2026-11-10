@@ -7,8 +7,9 @@ play a classic cooperation game against each other.
 Every agent is the same small language model (Qwen2.5-0.5B-Instruct) plus
 its own small set of extra weights, which act as its "genome". Agents play
 the iterated prisoner's dilemma. The highest scorers become parents: their
-genomes are mixed and randomly mutated to make the next generation. There
-is no gradient training. Selection is the only thing that changes the agents.
+genomes are mixed and randomly mutated to make the next generation. Evolution
+uses no gradient training: selection is the only thing that changes the
+agents.
 
 It runs on a 4 GB laptop GPU, and each run takes under an hour or so. Full
 write-up with figures: [docs/RESULTS.md](docs/RESULTS.md).
@@ -49,9 +50,12 @@ write-up with figures: [docs/RESULTS.md](docs/RESULTS.md).
 4. **Yet tit-for-tat is easy for the model to learn.** Trained directly
    with gradient descent, the same small genome plays perfect tit-for-tat,
    with far smaller weight changes than evolution makes. Evolution's
-   problem is finding it, not representing it.
-5. **Tit-for-tat needs enough company.** Planted among 12 defecting agents,
-   1 or 2 copies die out; 4 copies take over in a single generation.
+   problem is finding it, not representing it. Findings 5-7 plant copies of
+   this trained genome in a starting population to test what evolution
+   does with tit-for-tat once it exists.
+5. **Tit-for-tat needs enough company.** In a population of 12 otherwise
+   defecting agents, 1 or 2 copies die out; 4 copies take over in a single
+   generation.
 6. **Selection keeps tit-for-tat once it has a foothold.** With no weight
    decay, it held for 19 generations in all 3 seeds where it started as the
    top scorer. In control runs it was lost in all 4 seeds.
