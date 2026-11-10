@@ -108,7 +108,6 @@ experiments/
   run_queue.py             run a plan, resuming after interruptions
 
 docs/RESULTS.md            results log, related work, limitations
-legacy/gridworld/          the original gridworld project, with its docs (archived)
 ```
 
 ## The two experiments
@@ -166,7 +165,7 @@ hibernate kills it, and the queue command picks it back up.
 
 - **Only LoRA B matrices evolve.** A is fixed at PEFT's random init and shared, so a
   mutation to B changes behaviour directly. Evolving A and B from zero (as the
-  gridworld did) makes small mutations almost invisible.
+  original gridworld did) makes small mutations almost invisible.
 - **Same inputs for everyone.** All genomes in a generation see the same puzzles or the
   same tournament, so fitness differences come from the weights.
 - **The base genome is in generation 0**, so the best fitness never starts below the base model.
@@ -185,6 +184,16 @@ pip install -r requirements.txt
 ```
 
 Put `HF_TOKEN=...` in `.env` at the repo root if your model needs it.
+
+## Project history
+
+The project began as a 16x16 gridworld where LoRA agents moved around,
+collected food and fought, with a fine-tuning pipeline to give them a
+starting behaviour. It had too many moving parts to tell what evolution was
+actually doing, so it was narrowed to small games with clear baselines and
+controls: the prisoner's dilemma and Countdown. The gridworld code is kept
+at the [`gridworld-archive`](https://github.com/ljcarey123/the-selfish-lora/tree/gridworld-archive/legacy/gridworld)
+tag.
 
 ## Future work
 
