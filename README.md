@@ -11,8 +11,11 @@ genomes are mixed and randomly mutated to make the next generation. Evolution
 uses no gradient training: selection is the only thing that changes the
 agents.
 
-It runs on a 4 GB laptop GPU, and each run takes under an hour or so. Full
-write-up with figures: [docs/RESULTS.md](docs/RESULTS.md).
+It runs on a 4 GB laptop GPU, and each run takes under an hour or so.
+
+**Project site:** [ljcarey123.github.io/the-selfish-lora](https://ljcarey123.github.io/the-selfish-lora/)
+gives an illustrated tour of the goals, results, architecture and related
+research. Full results log: [docs/RESULTS.md](docs/RESULTS.md).
 
 ## Key terms
 

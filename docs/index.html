@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Selfish LoRA</title>
+  <meta name="description" content="Can natural selection teach a language model to cooperate? Evolving LoRA adapters in the iterated prisoner's dilemma: goals, results, architecture and related research.">
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<!-- Page outline: hero, the idea, goals, results, architecture, research, limits.
+     Each <section> id matches a nav link. Styles live in assets/site.css. -->
+
+<nav class="site-nav" aria-label="Sections">
+  <ul>
+    <li><a class="brand" href="#top">The Selfish LoRA</a></li>
+    <li><a href="#idea">The idea</a></li>
+    <li><a href="#goals">Goals</a></li>
+    <li><a href="#results">Results</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#research">Related research</a></li>
+    <li><a href="#limits">Limits</a></li>
+    <li><a href="https://github.com/ljcarey123/the-selfish-lora">GitHub</a></li>
+  </ul>
+</nav>
+
+<!-- ============================================================ HERO -->
+<header class="hero" id="top">
+  <p class="eyebrow">A small research project</p>
+  <h1>The Selfish LoRA</h1>
+  <p class="lede">Can natural selection, acting directly on a language model's weights,
+    teach it to cooperate?</p>
+  <p>This project breeds AI agents. Each one is the same small language model with its
+    own set of extra weights, its <em>genome</em>. They play a classic cooperation game
+    against each other, the best players have offspring, and the loop repeats. No
+    gradient training happens during evolution: selection is the only thing that changes
+    the agents.</p>
+
+  <div class="answer">
+    <p><strong>Short answer:</strong> selection can <em>keep</em> cooperation going once
+      it exists, but it never <em>discovered</em> it. And there's a twist: the original
+      model already plays a strategy (it always defects), so anything that pulls the
+      weights back towards it pulls behaviour towards defection.</p>
+  </div>
+
+  <p>Everything runs on a 4 GB laptop GPU, and a run takes 30-70 minutes.</p>
+
+  <div class="button-row">
+    <a class="button primary" href="https://github.com/ljcarey123/the-selfish-lora">Code on GitHub</a>
+    <a class="button" href="https://github.com/ljcarey123/the-selfish-lora/blob/main/docs/RESULTS.md">Full results log</a>
+    <a class="button" href="#architecture">How it's built</a>
+  </div>
+</header>
+
+<!-- ============================================================ THE IDEA -->
+<section id="idea">
+  <h2>The idea</h2>
+
+  <h3>The game: the iterated prisoner's dilemma</h3>
+  <p>Two players repeatedly choose, at the same time, to <strong>cooperate (C)</strong>
+    or <strong>defect (D)</strong>. Points per round:</p>
+
+  <div class="table-wrap">
+    <table class="payoff">
+      <thead>
+        <tr><th></th><th>They cooperate</th><th>They defect</th></tr>
+      </thead>
+      <tbody>
+        <tr><th>You cooperate</th><td>3, 3</td><td>0, 5</td></tr>
+        <tr><th>You defect</th><td>5, 0</td><td>1, 1</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Defecting always wins a single round, but two players who keep cooperating earn
+    far more than two who keep defecting. Because the game repeats, a player can reward
+    or punish the other's past moves. That tension between short-term gain and
+    long-term cooperation is why biologists and economists have studied this game
+    for decades.</p>
+
+  <h3>The players: one model, many genomes</h3>
+  <p>Every agent is <strong>Qwen2.5-0.5B-Instruct</strong>, a small open language model.
+    Each agent adds its own <strong>LoRA adapter</strong>: about 98,000 extra numbers
+    layered on the model's weights. The adapter is the agent's genome. Different genomes
+    make the model answer differently. Agents play by reading a text prompt with the
+    rules and the history so far, then replying with "C" or "D".</p>
+
+  <h3>The loop: one generation</h3>
+  <div class="loop">
+    <ol>
+      <li><strong>Load</strong>Copy one genome's numbers into the shared model.</li>
+      <li><strong>Play</strong>Every agent plays every other agent (and sometimes fixed bots).</li>
+      <li><strong>Score</strong>Fitness = average points per round across all matches.</li>
+      <li><strong>Breed</strong>Top scorers become parents. Children mix their parents' numbers, plus random mutation.</li>
+    </ol>
+    <p class="return">&#8617; the children become the next generation; repeat 15-25 times</p>
+  </div>
+
+  <h3>Key terms</h3>
+  <dl class="glossary">
+    <div><dt>Tit-for-tat</dt><dd>Cooperate first, then copy the opponent's last move. Simple, famous, and good at sustaining cooperation.</dd></div>
+    <div><dt>Always-defect</dt><dd>Never cooperate. The unmodified model plays this.</dd></div>
+    <div><dt>Control run</dt><dd>Same setup, but parents are picked at random instead of by score. Shows what happens by chance alone.</dd></div>
+    <div><dt>Weight decay</dt><dd>Each generation, every child is pulled part of the way back towards a reference genome, so mutations can't pile up forever.</dd></div>
+    <div><dt>Seed</dt><dd>The random starting point of a run. Repeating a result on several seeds shows it isn't luck.</dd></div>
+    <div><dt>Fingerprint</dt><dd>A genome's move in all 21 game histories of up to two rounds, compared with classic strategies.</dd></div>
+  </dl>
+</section>
+
+<!-- ============================================================ GOALS -->
+<section id="goals">
+  <h2>Goals</h2>
+  <p>The project asks whether the dynamics that evolutionary game theory predicts for
+    simple strategies also appear when the "organism" is a language model and the
+    "genes" are its weights. Concretely:</p>
+  <ol>
+    <li>Can selection on weights change a model's behaviour at all, beyond random drift?</li>
+    <li>Does the social environment (who you play against) decide what evolves?</li>
+    <li>Can evolution find <em>reciprocity</em>, a strategy like tit-for-tat that reacts to the opponent?</li>
+    <li>If it can't, is that because the model can't represent it, or because evolution can't find it?</li>
+    <li>Once reciprocity exists, can it spread and survive?</li>
+  </ol>
+  <p>Every experiment has a <strong>control run</strong> (random parents, everything else
+    identical), because without one you can't tell evolution from noise.</p>
+
+  <h3>How the project got here</h3>
+  <p>It began as a 16&times;16 gridworld where LoRA agents moved around, collected food
+    and fought. That had too many moving parts to tell what evolution was actually doing,
+    so it was narrowed to small games with clear baselines and controls. The original code
+    is archived at the
+    <a href="https://github.com/ljcarey123/the-selfish-lora/tree/gridworld-archive/legacy/gridworld"><code>gridworld-archive</code></a>
+    tag.</p>
+</section>
+
+<!-- ============================================================ RESULTS -->
+<section id="results">
+  <h2>Results</h2>
+  <p>Findings in the order they were made; each one led to the next question. Populations
+    had 12-16 agents. In the charts, <span style="color:var(--accent)">blue</span> is
+    selection by score and <span style="color:var(--warm)">orange</span> is the
+    random-parents control.</p>
+
+  <article class="finding">
+    <h3><span class="num">1</span>Selection changes behaviour</h3>
+    <p class="tag">Agents vs fixed bots (tit-for-tat, grudger, always-defect), 2 seeds</p>
+    <p>The base model always defects. With selection, the population went from 1% to
+      60-80% cooperation. In the control, random mutations piled up until 96-97% of
+      replies weren't valid moves at all: the model's output broke down.</p>
+    <figure>
+      <img src="figures/pd_panel.png" alt="Four panels over 20 generations: best and mean payoff, cooperation rate and invalid-move rate. Selected runs keep payoff and cooperation up; control runs' invalid rate climbs towards 100%." loading="lazy">
+      <figcaption>"evolved" = selection by score; "control" = random parents. Right panel: the control's replies stop being valid moves.</figcaption>
+    </figure>
+  </article>
+
+  <article class="finding">
+    <h3><span class="num">2</span>The opponents decide what evolves</h3>
+    <p>Against bots that reward cooperation, cooperation evolved. When agents played
+      only each other, the population stayed selfish: a lone cooperator among defectors
+      just gets exploited, and selection removes it. Same model, same method, opposite
+      outcome.</p>
+  </article>
+
+  <article class="finding">
+    <h3><span class="num">3</span>Evolution finds tricks, not tit-for-tat</h3>
+    <p class="tag">5 evolved runs across two setups</p>
+    <p>Evolution found strategies that count rounds, never ones that react to the
+      opponent. One run's best agent cooperated for five rounds and then defected in
+      round six, which happened to be the last round of every match. It never saw the
+      match length; selection found the trick anyway. Random match lengths removed that
+      cue, but evolution still produced no strategy that reacts to the opponent: the
+      populations cooperated just as much with always-defect as with tit-for-tat.</p>
+    <figure>
+      <img src="figures/pd_batch_a.png" alt="Three panels over 25 generations for three evolved and three control runs: mean payoff, cooperation rate, invalid rate. Evolved runs score and cooperate more than controls." loading="lazy">
+      <figcaption>Selection beats the control on payoff in all 3 seeds, but fingerprints show no reciprocity.</figcaption>
+    </figure>
+  </article>
+
+  <article class="finding">
+    <h3><span class="num">4</span>Yet tit-for-tat is easy for the model to learn</h3>
+    <p>To separate "can't represent it" from "can't find it", the same adapter was
+      trained directly with gradient descent to copy tit-for-tat
+      (<a href="https://github.com/ljcarey123/the-selfish-lora/blob/main/experiments/prisoners_dilemma/train_reference.py"><code>train_reference.py</code></a>).
+      It learned perfectly, including on longer games than it was trained on.</p>
+    <p>Its weights are also <strong>much closer to the original model</strong> than
+      anything evolution made (distance 2.0 vs about 12). Tit-for-tat is one specific
+      direction among 98,000, and random mutations almost never point that way: none of
+      160 random mutants came close. The limit is the search, not the model.</p>
+  </article>
+
+  <article class="finding">
+    <h3><span class="num">5</span>Tit-for-tat needs enough company</h3>
+    <p class="tag">Copies of the trained tit-for-tat genome planted in a population of 12</p>
+    <p>One or two copies died out. Four copies took over in a single generation: every
+      agent cooperated and scored exactly 3 points per round. This matches classic
+      theory: reciprocators only succeed when they meet each other often enough.</p>
+    <p>But cooperation then faded within about ten generations. Why became the next
+      question.</p>
+    <figure>
+      <img src="figures/pd_invasion.png" alt="Cooperation rate over 15 generations. Four tit-for-tat copies jump to full cooperation at generation 1, then decline; other conditions stay low." loading="lazy">
+      <figcaption>Only 4 copies of tit-for-tat (yellow) take over, then cooperation fades.</figcaption>
+    </figure>
+  </article>
+
+  <article class="finding">
+    <h3><span class="num">6</span>What weight decay pulls towards decides the outcome</h3>
+    <p class="tag">Batches C and E, 3 seeds pulled to the base model</p>
+    <p>Weight decay pulls every child back towards a reference genome. It's usually
+      treated as a neutral safety measure. Here the reference was the original model,
+      and the original model <em>is an always-defector</em>. In all 3 seeds, tit-for-tat
+      took over and then collapsed to always-defect within about 8 generations. Pulling
+      towards tit-for-tat instead kept it, even with random parents.</p>
+    <figure>
+      <img src="figures/pd_stability.png" alt="Cooperation rate over 15 generations. Runs pulled to the base model reach full cooperation then fall to zero; runs pulled to tit-for-tat end at full cooperation." loading="lazy">
+      <figcaption>Blue: pulled to the base model (3 seeds). Orange and green: pulled to tit-for-tat.</figcaption>
+    </figure>
+  </article>
+
+  <article class="finding">
+    <h3><span class="num">7</span>Without that pull, selection keeps tit-for-tat</h3>
+    <p class="tag">Batches D and E: no weight decay, 4 seeds, each with a matched control</p>
+    <p>With no decay, tit-for-tat held for all 19 generations in every seed where it
+      started as the top scorer. In one seed a defecting mutant appeared and was gone a
+      generation later. With random parents, it was lost every time. Runs with the same
+      seed start from the identical population, so each row compares like with like.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Seed</th><th>Tit-for-tat on top at start?</th><th>Selection: final population</th><th>Random parents: final population</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>0</td><td>yes</td><td>12/12 tit-for-tat</td><td>12/12 always-defect</td></tr>
+          <tr><td>2</td><td>yes</td><td>11/12 tit-for-tat</td><td>mixed, no tit-for-tat</td></tr>
+          <tr><td>3</td><td>yes</td><td>12/12 tit-for-tat</td><td>mostly always-defect</td></tr>
+          <tr><td>1</td><td>no</td><td>12/12 always-defect</td><td>mostly always-defect</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <figure>
+      <img src="figures/pd_no_decay.png" alt="Cooperation rate over 20 generations. Three selected runs stay at full cooperation; one selected run and all four random-parent runs stay low." loading="lazy">
+      <figcaption>Tit-for-tat survives with selection (3 of 4 seeds) and never with random parents.</figcaption>
+    </figure>
+  </article>
+
+  <article class="finding">
+    <h3><span class="num">8</span>A second task: Countdown arithmetic (paused)</h3>
+    <p>Evolving the model to solve arithmetic puzzles gave no improvement over the
+      control (6% vs 6% on held-out puzzles). With 24 puzzles per generation, one lucky
+      answer moves the score more than a real improvement does, so the fitness signal
+      is mostly noise.</p>
+  </article>
+</section>
+
+<!-- ============================================================ ARCHITECTURE -->
+<section id="architecture" class="wide">
+  <div class="prose">
+    <h2>Architecture</h2>
+    <p>About 1,400 lines of Python, split so that each piece does one job and the parts
+      that know about a particular game are kept apart from the parts that don't.</p>
+  </div>
+
+  <h3>Module map</h3>
+  <div class="modules">
+    <div class="box">
+      <h3>experiments/ &mdash; task-specific</h3>
+      <p>Each task supplies prompts, scoring and its own loop.</p>
+      <dl>
+        <dt>prisoners_dilemma/game.py</dt><dd>rules, prompt text, move parsing, payoffs, bots</dd>
+        <dt>prisoners_dilemma/run.py</dt><dd>tournament + evolution loop (main entry point)</dd>
+        <dt>prisoners_dilemma/train_reference.py</dt><dd>gradient-train a genome on a known strategy</dd>
+        <dt>prisoners_dilemma/fingerprint.py</dt><dd>which strategy does a genome play?</dd>
+        <dt>countdown/</dt><dd>the same loop on arithmetic puzzles</dd>
+        <dt>run_queue.py</dt><dd>run a plan of runs, resuming after crashes</dd>
+        <dt>plans/*.json</dt><dd>the exact arguments behind every result</dd>
+      </dl>
+    </div>
+    <div class="arrow" aria-hidden="true"><div><span>&rarr;</span>imports</div></div>
+    <div class="box library">
+      <h3>src/selfish_lora/ &mdash; game-agnostic library</h3>
+      <p>Knows nothing about any game. Never imports an experiment.</p>
+      <dl>
+        <dt>model.py</dt><dd>load the base model with a LoRA adapter</dd>
+        <dt>genome.py</dt><dd>what a genome is; copy it in and out of the model</dd>
+        <dt>evolution.py</dt><dd>generation 0, selection, crossover, mutation, decay</dd>
+        <dt>generate.py</dt><dd>batched greedy text generation</dd>
+        <dt>checkpoint.py</dt><dd>save and restore a run exactly</dd>
+        <dt>runlog.py</dt><dd>per-generation history and plots</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="prose">
+    <h3>Design principles</h3>
+    <ul class="principles">
+      <li><strong>Dependencies point one way.</strong> Experiments import the library;
+        the library never imports an experiment. A new task needs prompts and a scoring
+        function, nothing in <code>src/</code> changes.</li>
+      <li><strong>A genome is plain data.</strong> It's a dictionary from parameter names
+        to tensors, so evolution, saving, distance and fingerprinting are all simple
+        functions over dictionaries, with no class hierarchy to learn.</li>
+      <li><strong>The control changes exactly one line.</strong> A <code>control</code>
+        flag swaps "rank by score" for "rank randomly". Everything else is shared code,
+        so the comparison is fair by construction.</li>
+      <li><strong>Experiments are data, not code.</strong> Each batch of results is a
+        JSON plan listing runs and their arguments. Reproducing a result means running
+        its plan.</li>
+      <li><strong>Every run can resume exactly.</strong> A checkpoint after each
+        generation stores the population and all random number generator states, so an
+        interrupted run finishes with the same result it would have had anyway.</li>
+      <li><strong>Small, documented functions.</strong> Each module opens with a
+        docstring saying what it is for and why it's built that way.</li>
+    </ul>
+
+    <h3>The genome</h3>
+    <p>LoRA adds a small update to selected weight matrices: <code>W + 2&middot;B&middot;A</code>,
+      on the attention layers <code>q_proj</code> and <code>v_proj</code> in all 24
+      layers. <strong>Only B evolves.</strong> A stays fixed at a shared random value.
+      Because the update is linear in B, a mutation changes behaviour directly. B starts
+      at zero, so the original model is the all-zero genome, and a genome's size
+      (its "norm") is literally its distance from the original model.</p>
+<pre><code><span class="comment"># src/selfish_lora/genome.py</span>
+Genome = dict[str, torch.Tensor]
+
+def load_genome(model, genome: Genome):
+    """Write a genome's tensors into the model in place."""
+    params = dict(model.named_parameters())
+    with torch.no_grad():
+        for name, tensor in genome.items():
+            params[name].data.copy_(tensor.to(params[name].dtype))</code></pre>
+    <p>Switching between agents is one copy of a few hundred kilobytes, not a model reload.</p>
+
+    <h3>Breeding a generation</h3>
+    <p>The top two genomes (elites) pass through unchanged, so the best strategy found
+      so far can't be lost by accident. The top 25% become parents. Each child takes
+      every number from one of two parents at random, is optionally pulled towards a
+      reference genome (weight decay), then gets Gaussian noise.</p>
+<pre><code><span class="comment"># src/selfish_lora/evolution.py (crossover branch shown)</span>
+if control:
+    order = list(np.random.permutation(len(population)))   <span class="comment"># ignore fitness</span>
+else:
+    order = list(np.argsort(fitness)[::-1])                 <span class="comment"># best first</span>
+ranked = [population[i] for i in order]
+
+elites = [{k: v.clone() for k, v in g.items()} for g in ranked[:cfg.num_elites]]
+parents = ranked[:max(2, int(len(ranked) * cfg.parent_fraction))]
+
+children = []
+while len(elites) + len(children) &lt; cfg.population_size:
+    p1, p2 = random.sample(parents, 2)
+    child = {k: torch.where(torch.rand_like(p1[k]) &lt; 0.5, p1[k], p2[k]) for k in p1}
+    for k in child:
+        if cfg.weight_decay &gt; 0:
+            child[k] = base[k] + (1 - cfg.weight_decay) * (child[k] - base[k])
+        child[k] += torch.randn_like(child[k]) * cfg.mutation_std
+    children.append(child)
+return elites + children</code></pre>
+
+    <h3>Playing a tournament efficiently</h3>
+    <p>A generation of 12 agents playing each other at two match lengths is 132 matches.
+      Playing them one by one would mean reloading genomes thousands of times. Instead
+      <strong>all matches advance together, one round at a time</strong>: each round,
+      each genome is loaded once and answers every one of its unfinished matches in a
+      single batched call. That's about 120 short generation calls per generation.</p>
+<pre><code><span class="comment"># experiments/prisoners_dilemma/run.py, play_tournament (simplified)</span>
+for round_idx in range(max(lengths)):
+    for g in genome_ids:
+        own = [m for m in by_player[g] if round_idx &lt; m["length"]]
+        prompts = [build_prompt(m["moves"][g], m["moves"][_opponent(m, g)]) for m in own]
+        load_genome(model, population[g])
+        completions = generate(model, tokenizer, prompts, SYSTEM_PROMPT, max_new_tokens=3)
+        <span class="comment"># ...parse each reply into C, D or invalid</span>
+    <span class="comment"># bots move, then every match scores the round and appends both moves</span></code></pre>
+    <p>Moves are simultaneous: histories update only after every player has chosen.
+      An unreadable reply counts as a defection for the opponent but scores 0 for its
+      own player, so broken genomes can't be exploited or rewarded.</p>
+
+    <h3>Reproducibility</h3>
+    <div class="cards">
+      <div class="card">
+        <h3>Exact resume</h3>
+        <p>After every generation, <code>checkpoint.py</code> saves the arguments,
+          population, fixed A matrices and the Python, NumPy and PyTorch random states,
+          writing to a temporary file and renaming it so a crash can't corrupt it.</p>
+      </div>
+      <div class="card">
+        <h3>Matched starts</h3>
+        <p>The shared A matrices are always seeded with 0; the run's own seed then builds
+          generation 0. So runs with the same seed start from the identical population,
+          which is what makes the controls in finding 7 like-for-like.</p>
+      </div>
+      <div class="card">
+        <h3>Queue runner</h3>
+        <p><code>run_queue.py</code> reads a plan, skips finished runs, resumes partial
+          ones and starts the rest, each in its own process with its own log. Re-running
+          it after any interruption is always safe.</p>
+      </div>
+      <div class="card">
+        <h3>Measuring behaviour, not just score</h3>
+        <p>Once everyone cooperates, every agent scores 3.00 and fitness says nothing.
+          Each generation also logs cooperation rate, retaliation, invalid moves,
+          diversity and genome size, and <code>fingerprint.py</code> shows each genome's
+          actual strategy.</p>
+      </div>
+    </div>
+
+    <h3>Where gradients are used</h3>
+    <p>Only in <code>train_reference.py</code>, which trains the tit-for-tat genome used
+      in findings 4-7. It trains just the B matrices, with the same fixed A, so the result
+      is an ordinary genome that can be fingerprinted or planted into a population.
+      Evolution itself never computes a gradient.</p>
+  </div>
+</section>
+
+<!-- ============================================================ RESEARCH -->
+<section id="research" class="wide">
+  <div class="prose">
+    <h2>Related research</h2>
+    <p>This is not a systematic review; it places the project among the work it builds on
+      and the closest recent work.</p>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <h3>Evolving strategies (classic)</h3>
+      <ul>
+        <li><a href="https://public.websites.umich.edu/~axe/research/Evolving.pdf">Axelrod (1987)</a>:
+          a genetic algorithm over 70-gene lookup tables evolved tit-for-tat-like rules from scratch.</li>
+        <li>Axelrod &amp; Hamilton (1981): a lone reciprocator can't invade defectors, but a cluster can.</li>
+        <li><a href="https://www.nature.com/articles/355250a0">Nowak &amp; Sigmund (1992)</a>:
+          tit-for-tat is a catalyst that later gives way to more forgiving strategies.</li>
+        <li><a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC1182423">Imhof, Fudenberg &amp; Nowak (2005)</a>:
+          populations can cycle between cooperation and defection.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Language models as players</h3>
+      <ul>
+        <li><a href="https://arxiv.org/abs/2507.02618">Payne &amp; Alloui-Cros (2025)</a>:
+          frontier models in evolutionary tournaments against classic strategies.</li>
+        <li><a href="https://arxiv.org/abs/2501.16173">Willis et al. (2025)</a>:
+          models write complete strategies; populations of them then evolve.</li>
+        <li><a href="https://iclr.cc/virtual/2026/10018208">Li &amp; Wang (ICLR 2026 workshop)</a>:
+          a model writes strategy programs and refines them over tournaments.</li>
+      </ul>
+      <p>In all of these the model plays or writes strategies; its weights don't change.</p>
+    </div>
+    <div class="card">
+      <h3>Training weights with gradients</h3>
+      <ul>
+        <li><a href="https://arxiv.org/abs/2410.01639">Tennant, Hailes &amp; Musolesi (ICLR 2025)</a>:
+          reinforcement learning with moral rewards makes agents unlearn selfish play.</li>
+        <li><a href="https://arxiv.org/abs/2511.19405">Piche et al. (2025)</a>:
+          standard multi-agent RL drifts to defection; an opponent-shaping method learns tit-for-tat-like play.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Populations of LoRA adapters</h3>
+      <ul>
+        <li><a href="https://arxiv.org/abs/2605.16727">PopuLoRA (2026)</a>: the closest method.
+          Teacher and student adapters on one frozen model, trained with reinforcement
+          learning on coding tasks, with the worst adapters regularly replaced by mutation
+          and crossover of the best.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="prose">
+    <div class="answer">
+      <p><strong>Where this fits:</strong> evolving a language model's own weights by
+        selection alone, in a social game. As far as we know, that combination hasn't been
+        reported. The results echo the gradient work (plain optimisation doesn't find
+        tit-for-tat) and add one observation we haven't seen discussed: for a pretrained
+        model there's no neutral point in weight space, because the original model already
+        plays a strategy.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ LIMITS -->
+<section id="limits">
+  <h2>Limits and next steps</h2>
+  <ul>
+    <li>One small model and one prompt format.</li>
+    <li>Small populations (12-16) and short runs (15-25 generations).</li>
+    <li>1-4 seeds per condition; the two headline comparisons have 3-4 seeds each.</li>
+    <li>Fingerprints check histories of up to two rounds, so later differences could be missed.</li>
+  </ul>
+  <p>The open question is <strong>discovery</strong>: what would let evolution find
+    reciprocity from scratch? The most promising idea is to search a much smaller space,
+    such as a few hundred directions instead of 98,000. A cheap first check is to train
+    tit-for-tat by gradient inside random subspaces and find the smallest one that
+    works. That belongs to a possible
+    <a href="https://github.com/ljcarey123/the-selfish-lora/blob/main/docs/NEXT_PROJECT.md">follow-on project</a>.</p>
+</section>
+
+<footer>
+  <p>The Selfish LoRA &middot; Qwen2.5-0.5B-Instruct on an RTX 3050 Ti laptop GPU (4 GB) &middot;
+    <a href="https://github.com/ljcarey123/the-selfish-lora">Source on GitHub</a> &middot;
+    <a href="https://github.com/ljcarey123/the-selfish-lora/blob/main/docs/RESULTS.md">Results log</a></p>
+</footer>
+
+</body>
+</html>
